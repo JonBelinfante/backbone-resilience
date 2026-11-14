@@ -1,0 +1,10 @@
+# shellcheck settings for the whole repository.
+shell=bash
+# Follow `source` statements so functions from scripts/lib/ are understood.
+external-sources=true
+# Resolve `# shellcheck source=` paths against each script's own folder, not the current directory.
+source-path=SCRIPTDIR
+# Extra checks beyond the defaults that suit this project:
+#   quote-safe-variables        quote variables even when they look safe
+#   check-unassigned-uppercase  catch typos in environment variable names
+enable=quote-safe-variables,check-unassigned-uppercase

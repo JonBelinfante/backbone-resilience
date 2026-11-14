@@ -1,0 +1,98 @@
+name: pg-replication
+
+x-pg-env: &pg-env
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  POSTGRES_DB: appdb
+  REPLICATION_USER: replicator
+  REPLICATION_PASSWORD: replicator_pw
+  STANDBY_NAME: standby1          # also the application_name used for synchronous replication
+  STANDBY_SLOT: standby1_slot     # physical replication slot the primary keeps for the standby
+
+services:
+  pg-primary:
+    image: postgres:16
+    container_name: pg-primary
+    environment: *pg-env
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - hot_standby=on
+      - -c
+      - wal_keep_size=256MB
+      - -c
+      - max_slot_wal_keep_size=1GB   # a dead standby can never fill the primary's disk with retained WAL
+      - -c
+      - wal_log_hints=on             # allows pg_rewind of an old primary later
+      - -c
+      - hot_standby_feedback=on
+    ports:
+      - "5433:5432"
+    volumes:
+      - primary-data:/var/lib/postgresql/data
+      - ./primary/init-replication.sh:/docker-entrypoint-initdb.d/10-init-replication.sh:ro
+    healthcheck:
+      # -h 127.0.0.1 forces TCP: the temporary init-time server only listens on the unix socket,
+      # so this only goes healthy once the real server (and the init script) has finished.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d appdb"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [pgnet]
+
+  pg-standby:
+    image: postgres:16
+    container_name: pg-standby
+    environment:
+      <<: *pg-env
+      PRIMARY_HOST: pg-primary
+    # The trailing "--" ends the script's own options; `command` below is then passed through to postgres.
+    entrypoint: ["bash", "/standby/entrypoint.sh", "--"]
+    # Same WAL/slot settings as the primary, so a promoted standby behaves like a primary
+    # (can feed a rebuilt old primary, supports pg_rewind).
+    command:
+      - postgres
+      - -c
+      - hot_standby=on
+      - -c
+      - hot_standby_feedback=on
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - wal_keep_size=256MB
+      - -c
+      - max_slot_wal_keep_size=1GB
+      - -c
+      - wal_log_hints=on
+    ports:
+      - "5434:5432"
+    volumes:
+      - standby-data:/var/lib/postgresql/data
+      - ./standby/entrypoint.sh:/standby/entrypoint.sh:ro
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d appdb"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [pgnet]
+
+networks:
+  pgnet:
+
+# Named volumes live inside Docker, not in this (OneDrive-synced) folder.
+volumes:
+  primary-data:
+  standby-data:
