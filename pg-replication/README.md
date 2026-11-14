@@ -45,7 +45,10 @@ If the scripts are not executable: `chmod +x scripts/*.sh primary/*.sh standby/*
 | Full failover and fail-back | `./scripts/check-all.sh` (or `./scripts/test-failover-roundtrip.sh` alone) | 17 steps: fail over, rejoin the old primary with `pg_rewind`, write while it is down, compare both databases; then the starting state is restored |
 
 Connect directly: `psql -h localhost -p 5433 -U postgres appdb` (password `postgres`).
-These are throwaway credentials for a local experiment only.
+These are throwaway credentials for a local experiment only, so the ports are published on `127.0.0.1` only (see
+`docker-compose.yml`): the databases are not reachable from other machines on your network. If you have no `psql`
+on the host, use `docker exec -it pg-primary psql -U postgres appdb`. Keep the loopback binding; the well-known
+superuser password would otherwise be open to the whole network.
 
 ## Scripts, libraries and the round-trip test
 

@@ -33,7 +33,7 @@ services:
       - -c
       - hot_standby_feedback=on
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - primary-data:/var/lib/postgresql/data
       - ./primary/init-replication.sh:/docker-entrypoint-initdb.d/10-init-replication.sh:ro
@@ -75,7 +75,7 @@ services:
       - -c
       - wal_log_hints=on
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"
     volumes:
       - standby-data:/var/lib/postgresql/data
       - ./standby/entrypoint.sh:/standby/entrypoint.sh:ro
