@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Return the two databases to their starting roles: primary writes, standby replicates.
 # Usage: restore-starting-state.sh [-h | --help]
-# Requires: bash cat date docker mktemp rm
+# Requires: bash cat date mktemp rm
 # Exit codes: 0 success, 1 failure, 2 usage or configuration error
 
 set -Eeuo pipefail
@@ -25,6 +25,12 @@ readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
 # started by its bare name), so paths to sibling files work however the script is started.
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
+
+# shellcheck source=../lib/container.sh
+source "${SCRIPT_DIR}../lib/container.sh"
+# shellcheck source=../lib/database.sh
+source "${SCRIPT_DIR}../lib/database.sh"
+
 declare RUN_LOG=''
 declare -a CLEANUP_PATHS=()
 
@@ -123,14 +129,13 @@ role_of_container() {
   local container="${1:?container required}"
   local running
   local recovery
-  local sql='select pg_is_in_recovery()'
 
-  running="$(bash "${SCRIPT_DIR}container-info.sh" --container "${container}")"
+  running="$(container::is_running "${container}")"
   if [[ "${running}" != 'true' ]]; then
     printf 'stopped\n'
     return 0
   fi
-  recovery="$(docker exec "${container}" psql -U postgres -d appdb -X -Atq -c "${sql}")"
+  recovery="$(database::in_recovery "${container}")"
   if [[ "${recovery}" == 't' ]]; then
     printf 'replica\n'
   else
@@ -159,7 +164,7 @@ wait_for_running_node() {
   local container="${2:?container required}"
   local running
 
-  running="$(bash "${SCRIPT_DIR}container-info.sh" --container "${container}")"
+  running="$(container::is_running "${container}")"
   if [[ "${running}" == 'true' ]]; then
     bash "${SCRIPT_DIR}bring-up-database.sh" --database "${database}"
   fi
@@ -225,7 +230,7 @@ check_starting_state() {
 
 # Script entry point.
 main() {
-  require_commands bash cat date docker mktemp rm
+  require_commands bash cat date mktemp rm
   start_run_log
 
   while (( $# > 0 )); do

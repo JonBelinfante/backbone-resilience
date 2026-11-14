@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Switch the primary between asynchronous and synchronous replication.
 # Usage: sync-mode.sh [-h | --help] [--mode async|sync|status]
-# Requires: cat date docker mktemp rm sleep
+# Requires: cat date mktemp rm sleep
 # Exit codes: 0 success, 1 failure, 2 usage or configuration error
 set -Eeuo pipefail
 
@@ -21,6 +21,13 @@ readonly STANDBY_NAME="${STANDBY_NAME:-standby1}"
 readonly RUN_LOG_DIR="${RUN_LOG_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
+# SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
+# started by its bare name), so paths to sibling files work however the script is started.
+readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
+
+# shellcheck source=../lib/database.sh
+source "${SCRIPT_DIR}../lib/database.sh"
+
 declare RUN_LOG=''
 declare -a CLEANUP_PATHS=()
 
@@ -109,7 +116,7 @@ cleanup() {
 
 # Run psql inside the primary container. Extra arguments (for example -c SQL) are passed through.
 psql_primary() {
-  docker exec -i "${PRIMARY_CONTAINER}" psql -U postgres -d appdb -X -v ON_ERROR_STOP=1 "$@"
+  database::run "${PRIMARY_CONTAINER}" "$@"
 }
 
 # Make a commit wait for the standby (FIRST 1 = the first listed standby must confirm it).

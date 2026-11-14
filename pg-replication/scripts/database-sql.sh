@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Run SQL in a database container with psql, or answer whether it is in recovery.
 # Usage: database-sql.sh [-h | --help] --container NAME [--bare] [--ask recovery]
-# Requires: cat date docker mktemp rm
+# Requires: cat date mktemp rm
 # Exit codes: 0 success, 1 failure (psql or docker failed), 2 usage or configuration error
 
 set -Eeuo pipefail
@@ -18,8 +18,13 @@ shopt -s inherit_errexit
 readonly RUN_LOG_DIR="${RUN_LOG_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly NAME_PATTERN='^[A-Za-z0-9][A-Za-z0-9_.-]*$'
-readonly ASK_RECOVERY='select pg_is_in_recovery()'
+# SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
+# started by its bare name), so paths to sibling files work however the script is started.
+readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
+
+# shellcheck source=../lib/database.sh
+source "${SCRIPT_DIR}../lib/database.sh"
+
 declare RUN_LOG=''
 declare -a CLEANUP_PATHS=()
 
@@ -121,14 +126,13 @@ run_sql() {
   local ask="${2-}"
   local -a psql_args=("${@:3}")
 
-  if [[ ! "${container}" =~ ${NAME_PATTERN} ]]; then
-    die 2 "--container is required and must be a valid container name, got: ${container}"
-  fi
+  [[ -n "${container}" ]] || die 2 '--container is required (try --help)'
   if [[ -n "${ask}" ]]; then
     [[ "${ask}" == 'recovery' ]] || die 2 "unknown question: ${ask} (use recovery)"
-    psql_args=(-Atq -c "${ASK_RECOVERY}")
+    database::in_recovery "${container}"
+  else
+    database::run "${container}" "${psql_args[@]}"
   fi
-  docker exec -i "${container}" psql -U postgres -d appdb -X -v ON_ERROR_STOP=1 "${psql_args[@]}"
 }
 
 # Script entry point.
@@ -136,7 +140,7 @@ main() {
   local container=''
   local ask=''
   local -a psql_args=()
-  require_commands cat date docker mktemp rm
+  require_commands cat date mktemp rm
   start_run_log
   while (( $# > 0 )); do
     case "${1}" in

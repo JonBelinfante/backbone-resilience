@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Stop the primary or the standby database container and confirm it is down.
 # Usage: bring-down-database.sh [-h | --help] --database primary|standby
-# Requires: bash cat date docker mktemp rm
+# Requires: cat date mktemp rm
 # Exit codes: 0 success, 1 failure, 2 usage or configuration error
 
 set -Eeuo pipefail
@@ -26,6 +26,10 @@ readonly SCRIPT_NAME="${0##*/}"
 # started by its bare name), so paths to sibling files work however the script is started.
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 readonly STOP_TIMEOUT_SECONDS=30
+
+# shellcheck source=../lib/container.sh
+source "${SCRIPT_DIR}../lib/container.sh"
+
 declare RUN_LOG=''
 declare -a CLEANUP_PATHS=()
 
@@ -118,20 +122,12 @@ cleanup() {
   fi
 }
 
-# Stop the container, waiting up to STOP_TIMEOUT_SECONDS for a clean Postgres shutdown.
-stop_container() {
-  local container="${1:?container required}"
-
-  log INFO "CHANGE: stopping ${container}"
-  docker stop --time "${STOP_TIMEOUT_SECONDS}" "${container}" > /dev/null
-}
-
 # Fail unless the container is stopped.
 check_stopped() {
   local container="${1:?container required}"
   local running
 
-  running="$(bash "${SCRIPT_DIR}container-info.sh" --container "${container}")"
+  running="$(container::is_running "${container}")"
   if [[ "${running}" != 'false' ]]; then
     die 1 "${container} is still running"
   fi
@@ -144,12 +140,12 @@ bring_down() {
   local container
   local running
 
-  container="$(bash "${SCRIPT_DIR}container-info.sh" --database "${database}")"
-  running="$(bash "${SCRIPT_DIR}container-info.sh" --container "${container}")"
+  container="$(container::name_of "${database}" "${PRIMARY_CONTAINER}" "${STANDBY_CONTAINER}")"
+  running="$(container::is_running "${container}")"
   if [[ "${running}" == 'false' ]]; then
     log INFO "${container} is already stopped: nothing to do"
   else
-    stop_container "${container}"
+    container::stop "${container}" "${STOP_TIMEOUT_SECONDS}"
   fi
   check_stopped "${container}"
   printf '%s is down\n' "${container}"
@@ -159,7 +155,7 @@ bring_down() {
 main() {
   local database=''
 
-  require_commands bash cat date docker mktemp rm
+  require_commands cat date mktemp rm
   start_run_log
 
   while (( $# > 0 )); do

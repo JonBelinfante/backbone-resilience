@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Start the primary or the standby database container and wait until it is healthy.
 # Usage: bring-up-database.sh [-h | --help] --database primary|standby
-# Requires: bash cat date docker mktemp rm sleep
+# Requires: cat date mktemp rm
 # Exit codes: 0 success, 1 failure, 2 usage or configuration error
 
 set -Eeuo pipefail
@@ -27,6 +27,12 @@ readonly SCRIPT_NAME="${0##*/}"
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 readonly HEALTH_ATTEMPTS=60
 readonly HEALTH_PAUSE_SECONDS=1
+
+# shellcheck source=../lib/container.sh
+source "${SCRIPT_DIR}../lib/container.sh"
+# shellcheck source=../lib/database.sh
+source "${SCRIPT_DIR}../lib/database.sh"
+
 declare RUN_LOG=''
 declare -a CLEANUP_PATHS=()
 
@@ -131,46 +137,6 @@ peer_of_container() {
   fi
 }
 
-# Print the container's health: starting, healthy or unhealthy.
-container_health() {
-  local container="${1:?container required}"
-
-  docker inspect --format '{{.State.Health.Status}}' "${container}"
-}
-
-# Print t if Postgres in the container is a standby, and f if it accepts writes.
-database_is_standby() {
-  local container="${1:?container required}"
-
-  docker exec "${container}" psql -U postgres -d appdb -X -Atq -c 'select pg_is_in_recovery()'
-}
-
-# Start the container.
-start_container() {
-  local container="${1:?container required}"
-
-  log INFO "CHANGE: starting ${container}"
-  docker start "${container}" > /dev/null
-}
-
-# Wait until the container's health check passes, giving up after HEALTH_ATTEMPTS tries.
-wait_until_healthy() {
-  local container="${1:?container required}"
-  local attempt=1
-  local health
-
-  while (( attempt <= HEALTH_ATTEMPTS )); do
-    health="$(container_health "${container}")"
-    if [[ "${health}" == 'healthy' ]]; then
-      log INFO "${container} is healthy"
-      return 0
-    fi
-    attempt=$(( attempt + 1 ))
-    sleep "${HEALTH_PAUSE_SECONDS}"
-  done
-  die 1 "${container} was not healthy after ${HEALTH_ATTEMPTS} attempts"
-}
-
 # Stop the started container again if it and its peer are both writable (split-brain).
 guard_against_split_brain() {
   local container="${1:?container required}"
@@ -179,16 +145,16 @@ guard_against_split_brain() {
   local own_state
   local peer_state
 
-  peer_running="$(bash "${SCRIPT_DIR}container-info.sh" --container "${peer}")"
+  peer_running="$(container::is_running "${peer}")"
   if [[ "${peer_running}" != 'true' ]]; then
     return 0
   fi
-  wait_until_healthy "${peer}"
-  own_state="$(database_is_standby "${container}")"
-  peer_state="$(database_is_standby "${peer}")"
+  container::wait_healthy "${peer}" "${HEALTH_ATTEMPTS}" "${HEALTH_PAUSE_SECONDS}"
+  own_state="$(database::in_recovery "${container}")"
+  peer_state="$(database::in_recovery "${peer}")"
   if [[ "${own_state}" == 'f' && "${peer_state}" == 'f' ]]; then
     log ERROR "DECISION: ${container} and ${peer} are both writable: stopping ${container}"
-    docker stop "${container}" > /dev/null
+    container::stop "${container}"
     die 1 "split-brain prevented: ${container} was stopped again"
   fi
 }
@@ -200,14 +166,14 @@ bring_up() {
   local running
 
   log INFO 'bringing up the database'
-  container="$(bash "${SCRIPT_DIR}container-info.sh" --database "${database}")"
-  running="$(bash "${SCRIPT_DIR}container-info.sh" --container "${container}")"
+  container="$(container::name_of "${database}" "${PRIMARY_CONTAINER}" "${STANDBY_CONTAINER}")"
+  running="$(container::is_running "${container}")"
   if [[ "${running}" == 'true' ]]; then
     log INFO "${container} is already running"
   else
-    start_container "${container}"
+    container::start "${container}"
   fi
-  wait_until_healthy "${container}"
+  container::wait_healthy "${container}" "${HEALTH_ATTEMPTS}" "${HEALTH_PAUSE_SECONDS}"
   guard_against_split_brain "${container}" "$(peer_of_container "${container}")"
   printf '%s is up\n' "${container}"
 }
@@ -216,7 +182,7 @@ bring_up() {
 main() {
   local database=''
 
-  require_commands bash cat date docker mktemp rm sleep
+  require_commands cat date mktemp rm
   start_run_log
 
   while (( $# > 0 )); do

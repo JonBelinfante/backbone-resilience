@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Prove that the standby is streaming WAL from the primary and replaying it.
 # Usage: verify.sh [-h | --help]
-# Requires: bash cat date head mktemp rm sleep
+# Requires: cat date head mktemp rm sleep
 # Exit codes: 0 all checks passed, 1 a check failed, 2 usage or configuration error
 set -Eeuo pipefail
 
@@ -23,9 +23,12 @@ readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
 # started by its bare name), so paths to sibling files work however the script is started.
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
-readonly DATABASE_SQL="${SCRIPT_DIR}database-sql.sh"
 readonly POLL_ATTEMPTS=100
 readonly POLL_PAUSE='0.1'
+
+# shellcheck source=../lib/database.sh
+source "${SCRIPT_DIR}../lib/database.sh"
+
 declare RUN_LOG=''
 declare -a CLEANUP_PATHS=()
 
@@ -189,8 +192,8 @@ check_roles() {
   local standby
 
   heading '1. Roles'
-  primary="$(bash "${DATABASE_SQL}" --container "${PRIMARY_CONTAINER}" --ask recovery)"
-  standby="$(bash "${DATABASE_SQL}" --container "${STANDBY_CONTAINER}" --ask recovery)"
+  primary="$(database::in_recovery "${PRIMARY_CONTAINER}")"
+  standby="$(database::in_recovery "${STANDBY_CONTAINER}")"
   printf 'primary in recovery: %s (expect f)\n' "${primary}"
   printf 'standby in recovery: %s (expect t)\n' "${standby}"
   if [[ "${primary}" != 'f' || "${standby}" != 't' ]]; then
@@ -204,10 +207,8 @@ check_streaming() {
   local streaming
 
   heading '2. Streaming connection, as seen by the primary'
-  bash "${DATABASE_SQL}" --container "${PRIMARY_CONTAINER}" <<< "$(sql_replication)"
-  streaming="$(bash "${DATABASE_SQL}" \
-    --container "${PRIMARY_CONTAINER}" \
-    --bare <<< "$(sql_streaming_count)")"
+  database::run "${PRIMARY_CONTAINER}" <<< "$(sql_replication)"
+  streaming="$(database::bare "${PRIMARY_CONTAINER}" <<< "$(sql_streaming_count)")"
   if (( streaming < 1 )); then
     die 1 'no streaming standby'
   fi
@@ -220,9 +221,7 @@ row_delay() {
   local query
 
   query="$(sql_row_delay)"
-  bash "${DATABASE_SQL}" \
-    --container "${STANDBY_CONTAINER}" \
-    --bare <<< "\\set id ${id}"$'\n'"${query}" 2> /dev/null
+  database::bare "${STANDBY_CONTAINER}" <<< "\\set id ${id}"$'\n'"${query}" 2> /dev/null
 }
 
 # Poll the standby until the row appears; print the delay in milliseconds, or nothing
@@ -250,10 +249,8 @@ check_round_trip() {
   local delay
 
   heading '3. Write on primary, read on standby'
-  bash "${DATABASE_SQL}" --container "${PRIMARY_CONTAINER}" <<< "$(sql_create_table)"
-  id="$(bash "${DATABASE_SQL}" \
-    --container "${PRIMARY_CONTAINER}" \
-    --bare <<< "$(sql_insert_row)" | head -n 1)"
+  database::run "${PRIMARY_CONTAINER}" <<< "$(sql_create_table)"
+  id="$(database::bare "${PRIMARY_CONTAINER}" <<< "$(sql_insert_row)" | head -n 1)"
   printf 'inserted row id=%s on primary\n' "${id}"
   delay="$(poll_standby "${id}")"
   if [[ -z "${delay}" ]]; then
@@ -268,9 +265,7 @@ check_round_trip() {
 # error message is the expected outcome here.
 check_read_only() {
   heading '4. Standby is read-only'
-  if bash "${DATABASE_SQL}" \
-    --container "${STANDBY_CONTAINER}" \
-    <<< "$(sql_rejected_write)" > /dev/null 2>&1; then
+  if database::run "${STANDBY_CONTAINER}" <<< "$(sql_rejected_write)" > /dev/null 2>&1; then
     die 1 'standby accepted a write'
   fi
   printf 'OK: standby rejected the write\n'
@@ -280,12 +275,12 @@ check_read_only() {
 # Check 5: show received and replayed WAL positions on the standby.
 check_wal_positions() {
   heading '5. WAL positions'
-  bash "${DATABASE_SQL}" --container "${STANDBY_CONTAINER}" <<< "$(sql_wal_positions)"
+  database::run "${STANDBY_CONTAINER}" <<< "$(sql_wal_positions)"
 }
 
 # Script entry point.
 main() {
-  require_commands bash cat date head mktemp rm sleep
+  require_commands cat date head mktemp rm sleep
   start_run_log
 
   while (( $# > 0 )); do

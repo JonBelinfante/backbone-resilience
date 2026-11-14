@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Promote the standby to primary (manual failover).
 # Usage: promote-standby-to-primary.sh [-h | --help] [--force]
-# Requires: bash cat date docker mktemp rm
+# Requires: cat date mktemp rm
 # Exit codes: 0 success, 1 failure, 2 usage or configuration error
 set -Eeuo pipefail
 
@@ -23,7 +23,10 @@ readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
 # started by its bare name), so paths to sibling files work however the script is started.
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
-readonly DATABASE_SQL="${SCRIPT_DIR}database-sql.sh"
+
+# shellcheck source=../lib/database.sh
+source "${SCRIPT_DIR}../lib/database.sh"
+
 declare RUN_LOG=''
 declare -a CLEANUP_PATHS=()
 
@@ -118,13 +121,12 @@ select ('x' || substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8))::bit(32)::in
 SQL
 }
 
-# Guard rail: stop if the old primary still answers. pg_isready exits 0 if it accepts
-# connections; if the container is stopped the docker exec itself fails, which also counts
-# as "not reachable".
+# Guard rail: stop if the old primary still answers. database::is_ready succeeds if it accepts
+# connections; a stopped container counts as "not reachable".
 check_primary_unreachable() {
   local message
 
-  if docker exec "${PRIMARY_CONTAINER}" pg_isready -q -h 127.0.0.1 > /dev/null 2>&1; then
+  if database::is_ready "${PRIMARY_CONTAINER}"; then
     log INFO "DECISION: refused to promote ${STANDBY_CONTAINER}: ${PRIMARY_CONTAINER} is reachable"
     message="Primary '${PRIMARY_CONTAINER}' is still accepting connections."
     message+=' Promoting now would create two writable nodes (split-brain).'
@@ -141,9 +143,7 @@ promote_standby() {
 
   log INFO "DECISION: promoting ${STANDBY_CONTAINER} (forced=${forced})"
   printf 'Promoting %s ...\n' "${STANDBY_CONTAINER}"
-  bash "${DATABASE_SQL}" \
-    --container "${STANDBY_CONTAINER}" \
-    --bare <<< 'select pg_promote(true, 60)' > /dev/null
+  database::bare "${STANDBY_CONTAINER}" <<< 'select pg_promote(true, 60)' > /dev/null
 }
 
 # Print evidence that promotion worked: the standby is no longer in recovery, and its timeline.
@@ -151,10 +151,8 @@ report_promotion() {
   local recovery
   local timeline
 
-  recovery="$(bash "${DATABASE_SQL}" --container "${STANDBY_CONTAINER}" --ask recovery)"
-  timeline="$(bash "${DATABASE_SQL}" \
-    --container "${STANDBY_CONTAINER}" \
-    --bare <<< "$(sql_timeline)")"
+  recovery="$(database::in_recovery "${STANDBY_CONTAINER}")"
+  timeline="$(database::bare "${STANDBY_CONTAINER}" <<< "$(sql_timeline)")"
   printf 'in recovery: %s (expect f)\n' "${recovery}"
   printf 'timeline:    %s (was 1 before promotion)\n' "${timeline}"
   printf '\n%s is now the writable primary.\n' "${STANDBY_CONTAINER}"

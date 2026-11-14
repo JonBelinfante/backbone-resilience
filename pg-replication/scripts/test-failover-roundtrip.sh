@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Test a failover and fail-back round trip: data must survive on both databases.
 # Usage: test-failover-roundtrip.sh [-h | --help]
-# Requires: bash cat date docker mktemp rm sleep
+# Requires: cat date mktemp rm sleep
 # Exit codes: 0 every step passed, 1 a step failed, 2 usage or configuration error
 
 set -Eeuo pipefail
@@ -27,7 +27,6 @@ readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
 # started by its bare name), so paths to sibling files work however the script is started.
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
-readonly DATABASE_SQL="${SCRIPT_DIR}database-sql.sh"
 readonly COMPOSE_FILE="${SCRIPT_DIR}../docker-compose.yml"
 readonly SETTLE_SECONDS=2
 readonly TOTAL_STEPS=17
@@ -44,6 +43,10 @@ readonly NOTE_THREE='row-3-written-while-replica-was-down'
 
 # shellcheck source=../lib/story.sh
 source "${SCRIPT_DIR}../lib/story.sh"
+# shellcheck source=../lib/container.sh
+source "${SCRIPT_DIR}../lib/container.sh"
+# shellcheck source=../lib/database.sh
+source "${SCRIPT_DIR}../lib/database.sh"
 
 declare RUN_LOG=''
 declare -a CLEANUP_PATHS=()
@@ -140,7 +143,7 @@ run_statement() {
   local sql="${2:?sql required}"
 
   story::narrate "SQL on ${container}: ${sql}"
-  bash "${DATABASE_SQL}" --container "${container}" <<< "${sql}" 2>&1 | story::narrate_stream
+  database::run "${container}" <<< "${sql}" 2>&1 | story::narrate_stream
 }
 
 # Start a numbered step: print its heading and record it in the run log.
@@ -168,7 +171,7 @@ expect_query() {
   local expected="${3-}"
   local actual
 
-  actual="$(bash "${DATABASE_SQL}" --container "${container}" --bare <<< "${sql}")"
+  actual="$(database::bare "${container}" <<< "${sql}")"
   story::narrate_query "${container}" "${sql}" "${actual}"
   story::expect_equal "${container} returned the expected data" "${actual}" "${expected}"
 }
@@ -178,20 +181,18 @@ expect_stopped() {
   local container="${1:?container required}"
   local running
 
-  running="$(docker inspect --format '{{.State.Running}}' "${container}")"
-  story::narrate "RUN docker inspect --format '{{.State.Running}}' ${container} => ${running}"
+  running="$(container::is_running "${container}")"
+  story::narrate "container::is_running ${container} => ${running}"
   story::expect_equal "${container} is stopped" "${running}" 'false'
 }
 
-# Drop every table in the test schema with one multi-statement drop built from the catalog.
+# Drop every table in the test schema: the library builds the statements, then they are run.
 drop_all_tables() {
   local container="${1:?container required}"
-  local sql="select string_agg(format('drop table if exists %I cascade', tablename), '; ')"
   local drops
 
-  sql+=" from pg_tables where schemaname = '${TEST_SCHEMA}'"
-  drops="$(bash "${DATABASE_SQL}" --container "${container}" --bare <<< "${sql}")"
-  story::narrate_query "${container}" "${sql}" "${drops}"
+  drops="$(database::drop_all_sql "${container}" "${TEST_SCHEMA}")"
+  story::narrate_query "${container}" "drop every table in ${TEST_SCHEMA}" "${drops}"
   if [[ -n "${drops}" ]]; then
     run_statement "${container}" "${drops}"
   fi
@@ -200,7 +201,7 @@ drop_all_tables() {
 # Step 1: start both databases and confirm the starting roles.
 start_both_databases() {
   begin_step 1 'start the primary and the standby'
-  story::run_logged docker compose -f "${COMPOSE_FILE}" up -d --pull "${UP_PULL_POLICY}"
+  story::run_logged container::compose_up "${COMPOSE_FILE}" "${UP_PULL_POLICY}"
   story::run_logged bash "${SCRIPT_DIR}bring-up-database.sh" --database primary
   story::run_logged bash "${SCRIPT_DIR}bring-up-database.sh" --database standby
   expect_query "${PRIMARY_CONTAINER}" "${SQL_ROLE}" "${IS_WRITER}"
@@ -327,7 +328,7 @@ run_and_restore() {
 
 # Script entry point.
 main() {
-  require_commands bash cat date docker mktemp rm sleep
+  require_commands cat date mktemp rm sleep
   start_run_log
 
   while (( $# > 0 )); do

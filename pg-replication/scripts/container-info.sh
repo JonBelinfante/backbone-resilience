@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Print the container name of a database, or whether a container is running.
 # Usage: container-info.sh [-h | --help] (--database primary|standby | --container NAME)
-# Requires: cat date docker mktemp rm
+# Requires: cat date mktemp rm
 # Exit codes: 0 answer printed, 1 failure (for example no such container), 2 usage error
 
 set -Eeuo pipefail
@@ -21,7 +21,13 @@ readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
 readonly RUN_LOG_DIR="${RUN_LOG_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly NAME_PATTERN='^[A-Za-z0-9][A-Za-z0-9_.-]*$'
+# SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
+# started by its bare name), so paths to sibling files work however the script is started.
+readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
+
+# shellcheck source=../lib/container.sh
+source "${SCRIPT_DIR}../lib/container.sh"
+
 declare RUN_LOG=''
 declare -a CLEANUP_PATHS=()
 
@@ -110,37 +116,6 @@ cleanup() {
   fi
 }
 
-# Print the container name for a database.
-print_container_for_database() {
-  log INFO 'looking up the container for a database'
-  local database="${1:?database required}"
-
-  case "${database}" in
-    primary)
-      printf '%s\n' "${PRIMARY_CONTAINER}"
-      ;;
-    standby)
-      printf '%s\n' "${STANDBY_CONTAINER}"
-      ;;
-    *)
-      die 2 "unknown database: ${database} (use primary or standby)"
-      ;;
-  esac
-}
-
-# Print true if the container is running and false if it is stopped; fail if it does not exist.
-print_container_running() {
-  log INFO 'checking whether a container is running'
-  local container="${1:?container required}"
-
-  if [[ ! "${container}" =~ ${NAME_PATTERN} ]]; then
-    die 2 "not a valid container name: ${container}"
-  fi
-  if ! docker inspect --format '{{.State.Running}}' "${container}" 2> /dev/null; then
-    die 1 "no such container: ${container}"
-  fi
-}
-
 # Answer the one question that was asked; exactly one of database and container is given.
 answer_question() {
   log INFO 'answering the question'
@@ -148,9 +123,9 @@ answer_question() {
   local container="${2-}"
 
   if [[ -n "${database}" && -z "${container}" ]]; then
-    print_container_for_database "${database}"
+    container::name_of "${database}" "${PRIMARY_CONTAINER}" "${STANDBY_CONTAINER}"
   elif [[ -z "${database}" && -n "${container}" ]]; then
-    print_container_running "${container}"
+    container::is_running "${container}"
   else
     die 2 'give exactly one of --database or --container (try --help)'
   fi
@@ -161,7 +136,7 @@ main() {
   local database=''
   local container=''
 
-  require_commands cat date docker mktemp rm
+  require_commands cat date mktemp rm
   start_run_log
 
   while (( $# > 0 )); do

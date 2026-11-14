@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Save the containers' own logs into the logs folder, for audit.
 # Usage: collect-logs.sh [-h | --help] [--container NAME ...]
-# Requires: cat date docker mkdir mktemp rm wc
+# Requires: cat date mkdir mktemp rm wc
 # Exit codes: 0 success, 1 failure, 2 usage or configuration error
 set -Eeuo pipefail
 
@@ -20,6 +20,13 @@ readonly LOG_DIR="${LOG_DIR:-logs}"
 readonly RUN_LOG_DIR="${RUN_LOG_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
+# SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
+# started by its bare name), so paths to sibling files work however the script is started.
+readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
+
+# shellcheck source=../lib/container.sh
+source "${SCRIPT_DIR}../lib/container.sh"
+
 declare RUN_LOG=''
 declare -a CLEANUP_PATHS=()
 
@@ -116,7 +123,7 @@ collect() {
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   for container in "$@"; do
     out="${LOG_DIR}/container-${container}-${stamp}.log"
-    if docker logs -t "${container}" > "${out}" 2>&1; then
+    if container::logs "${container}" > "${out}" 2>&1; then
       lines="$(wc -l < "${out}")"
       log INFO "saved ${container} to ${out}"
       printf 'saved %d lines from %s -> %s\n' "${lines}" "${container}" "${out}"

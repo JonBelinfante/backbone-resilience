@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Turn the stopped old primary into a standby of the current writable node (pg_rewind).
 # Usage: promote-primary-to-standby.sh [-h | --help]
-# Requires: bash cat date docker mktemp rm sleep
+# Requires: bash cat date mktemp rm sleep
 # Exit codes: 0 success, 1 failure, 2 usage or configuration error
 
 set -Eeuo pipefail
@@ -29,10 +29,15 @@ readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
 # started by its bare name), so paths to sibling files work however the script is started.
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
-readonly DATABASE_SQL="${SCRIPT_DIR}database-sql.sh"
 readonly DATABASE_PORT=5432
 readonly STREAM_ATTEMPTS=30
 readonly STREAM_PAUSE_SECONDS=1
+
+# shellcheck source=../lib/container.sh
+source "${SCRIPT_DIR}../lib/container.sh"
+# shellcheck source=../lib/database.sh
+source "${SCRIPT_DIR}../lib/database.sh"
+
 declare RUN_LOG=''
 declare -a CLEANUP_PATHS=()
 
@@ -127,57 +132,12 @@ cleanup() {
   fi
 }
 
-# Print one value from docker inspect for a container.
-# Usage: inspect_value CONTAINER GO_TEMPLATE
-inspect_value() {
-  local container="${1:?container required}"
-  local template="${2:?template required}"
-
-  docker inspect --format "${template}" "${container}"
-}
-
-# Print the name of the Docker volume mounted in a container (each node has exactly one).
-volume_of_container() {
-  local container="${1:?container required}"
-  local template='{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}{{end}}{{end}}'
-
-  inspect_value "${container}" "${template}"
-}
-
-# Print the name of the Docker network a container is attached to.
-network_of_container() {
-  local container="${1:?container required}"
-
-  inspect_value "${container}" '{{.HostConfig.NetworkMode}}'
-}
-
-# Print the value of an environment variable set inside a running container.
-read_container_setting() {
-  local container="${1:?container required}"
-  local name="${2:?name required}"
-
-  docker exec "${container}" printenv "${name}"
-}
-
-# Print the Postgres data directory used inside the containers (the image sets PGDATA).
-data_dir_of_writer() {
-  read_container_setting "${STANDBY_CONTAINER}" PGDATA
-}
-
-# Print the two settings lines that make the data directory follow the writable node.
-print_standby_settings() {
-  local conninfo="${1:?connection string required}"
-
-  printf "primary_conninfo = '%s'\n" "${conninfo}"
-  printf "primary_slot_name = '%s'\n" "${STANDBY_SLOT}"
-}
-
 # Fail unless the old primary is stopped: pg_rewind needs a cleanly stopped server.
 check_old_primary_stopped() {
   local running
   local hint='bring-down-database.sh --database primary'
 
-  running="$(inspect_value "${PRIMARY_CONTAINER}" '{{.State.Running}}')"
+  running="$(container::is_running "${PRIMARY_CONTAINER}")"
   if [[ "${running}" != 'false' ]]; then
     die 1 "${PRIMARY_CONTAINER} is running: stop it first (${hint})"
   fi
@@ -188,7 +148,7 @@ check_old_primary_stopped() {
 check_writer_is_writable() {
   local recovery
 
-  recovery="$(bash "${DATABASE_SQL}" --container "${STANDBY_CONTAINER}" --ask recovery)"
+  recovery="$(database::in_recovery "${STANDBY_CONTAINER}")"
   if [[ "${recovery}" != 'f' ]]; then
     die 1 "${STANDBY_CONTAINER} is not accepting writes: promote it first"
   fi
@@ -203,77 +163,35 @@ ensure_replication_slot() {
 
   log INFO 'making sure the replication slot exists on the writable node'
   log INFO "CHANGE: ensuring slot ${STANDBY_SLOT} exists on ${STANDBY_CONTAINER}"
-  bash "${DATABASE_SQL}" \
-    --container "${STANDBY_CONTAINER}" \
-    --bare <<< "${create}${missing}${named}" > /dev/null
+  database::bare "${STANDBY_CONTAINER}" <<< "${create}${missing}${named}" > /dev/null
 }
 
 # Force a checkpoint on the writable node. Until it has one after promotion, its control file
 # still shows the old timeline and pg_rewind would wrongly decide no rewind is needed.
 checkpoint_writer() {
   log INFO 'forcing a checkpoint on the writable node'
-  bash "${DATABASE_SQL}" --container "${STANDBY_CONTAINER}" --bare <<< 'checkpoint' > /dev/null
+  database::bare "${STANDBY_CONTAINER}" <<< 'checkpoint' > /dev/null
 }
 
-# Run pg_rewind in a throwaway container that mounts the old primary's data volume and joins
-# its network, so it can read the writable node's files over a normal connection.
+# Rewind the old primary to the new timeline with pg_rewind (see container::rewind).
 rewind_old_primary() {
-  local image
-  local network
-  local volume
-  local postgres_password
-  local data_dir
-  local source_server="host=${STANDBY_CONTAINER} port=${DATABASE_PORT}"
-
   log INFO 'rewinding the old primary to the new timeline'
-  image="$(inspect_value "${PRIMARY_CONTAINER}" '{{.Config.Image}}')"
-  network="$(network_of_container "${PRIMARY_CONTAINER}")"
-  volume="$(volume_of_container "${PRIMARY_CONTAINER}")"
-  postgres_password="$(read_container_setting "${STANDBY_CONTAINER}" POSTGRES_PASSWORD)"
-  data_dir="$(data_dir_of_writer)"
-  source_server+=' user=postgres dbname=postgres'
-  log INFO "CHANGE: pg_rewind of volume ${volume} against ${STANDBY_CONTAINER}"
-  PGPASSWORD="${postgres_password}" docker run \
-    --rm \
-    --user postgres \
-    --network "${network}" \
-    --env PGPASSWORD \
-    --volume "${volume}:${data_dir}" \
-    "${image}" \
-    pg_rewind \
-    --target-pgdata="${data_dir}" \
-    --source-server="${source_server}" \
-    --progress
+  container::rewind "${PRIMARY_CONTAINER}" "${STANDBY_CONTAINER}" "${DATABASE_PORT}"
 }
 
-# Mark the rewound data directory as a standby of the writable node. The settings are appended,
-# so they override the copies pg_rewind brought over (the last occurrence in the file wins).
+# Mark the rewound data directory as a standby of the writable node (see container::mark_standby).
 write_standby_settings() {
-  local image
-  local volume
-  local replication_password
-  local data_dir
-  local conninfo
-  local program='touch standby.signal && cat >> postgresql.auto.conf'
-
   log INFO 'marking the rewound data directory as a standby'
-  image="$(inspect_value "${PRIMARY_CONTAINER}" '{{.Config.Image}}')"
-  volume="$(volume_of_container "${PRIMARY_CONTAINER}")"
-  replication_password="$(read_container_setting "${STANDBY_CONTAINER}" REPLICATION_PASSWORD)"
-  data_dir="$(data_dir_of_writer)"
-  conninfo="host=${STANDBY_CONTAINER} port=${DATABASE_PORT} user=${REPLICATION_USER}"
-  conninfo+=" password=${replication_password} application_name=${STANDBY_NAME}"
-  log INFO "CHANGE: configuring ${PRIMARY_CONTAINER} as a standby of ${STANDBY_CONTAINER}"
-  print_standby_settings "${conninfo}" |
-    docker run \
-      --rm \
-      --interactive \
-      --user postgres \
-      --volume "${volume}:${data_dir}" \
-      --workdir "${data_dir}" \
-      --entrypoint sh \
-      "${image}" \
-      -c "${program}"
+  local password
+  local conninfo="host=${STANDBY_CONTAINER} port=${DATABASE_PORT} user=${REPLICATION_USER}"
+
+  password="$(container::setting "${STANDBY_CONTAINER}" REPLICATION_PASSWORD)"
+  conninfo+=" password=${password} application_name=${STANDBY_NAME}"
+  container::mark_standby \
+    "${PRIMARY_CONTAINER}" \
+    "${STANDBY_CONTAINER}" \
+    "${conninfo}" \
+    "${STANDBY_SLOT}"
 }
 
 # Start the old primary through bring-up-database.sh, which waits until it is healthy.
@@ -291,9 +209,7 @@ wait_until_streaming() {
 
   log INFO 'waiting for the standby to start streaming'
   while (( attempt <= STREAM_ATTEMPTS )); do
-    streaming="$(bash "${DATABASE_SQL}" \
-      --container "${STANDBY_CONTAINER}" \
-      --bare <<< "${query}${filter}")"
+    streaming="$(database::bare "${STANDBY_CONTAINER}" <<< "${query}${filter}")"
     if [[ "${streaming}" == '1' ]]; then
       log INFO "${PRIMARY_CONTAINER} is streaming from ${STANDBY_CONTAINER}"
       return 0
@@ -309,14 +225,14 @@ report_result() {
   local recovery
 
   log INFO 'reporting the result'
-  recovery="$(bash "${DATABASE_SQL}" --container "${PRIMARY_CONTAINER}" --ask recovery)"
+  recovery="$(database::in_recovery "${PRIMARY_CONTAINER}")"
   printf '%s in recovery: %s (expect t)\n' "${PRIMARY_CONTAINER}" "${recovery}"
   printf '%s is now a standby of %s\n' "${PRIMARY_CONTAINER}" "${STANDBY_CONTAINER}"
 }
 
 # Script entry point.
 main() {
-  require_commands bash cat date docker mktemp rm sleep
+  require_commands bash cat date mktemp rm sleep
   start_run_log
 
   while (( $# > 0 )); do
