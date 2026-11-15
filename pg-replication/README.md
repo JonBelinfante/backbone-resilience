@@ -68,7 +68,8 @@ superuser password would otherwise be open to the whole network.
 | `promote-primary-to-standby.sh` | Rebuilds the stopped old primary as a standby of the new writer: slot, checkpoint, `pg_rewind`, standby settings, start, wait until streaming |
 | `test-failover-roundtrip.sh` | 17-step test that tells its story (every line has a UTC time and the script name, with each SQL statement, the data it returned and each script's output): drop tables, replicate a row, fail over, write on the promoted standby, rejoin the old primary, write while the replica is down, compare both databases |
 | `restore-starting-state.sh` | Reads the current roles and returns to the starting state (`pg-primary` writes, `pg-standby` replicates): starts a stopped node, or fails back with `pg_rewind` after a failover. Run it after any experiment |
-| `run-all-checks.sh [--skip-roundtrip]` | One line per check: `PASS lint`, `PASS roundtrip`. A failure also prints the last 15 lines of that check's output |
+| `run-all-checks.sh [--skip-roundtrip]` | One line per check: `PASS lint`, `PASS docs`, `PASS roundtrip`. A failure also prints the last 15 lines of that check's output |
+| `check-docs.sh` | Read-only check of the documents: every relative link must exist, and every function named in `docs/` must be defined in a script (and, on a line that links a script, defined in that script). Uses `check-docs.awk` |
 | `report-refactoring.sh [--mode MODE] [--show NAME]` | Read-only refactoring aid. Modes: `duplicates`, `usage` (reuse map), `size`, `all`, `brief` (one tagged line per finding), `baseline` (save `refactor-baseline.txt`), `changes` (diff against it). `--show NAME` prints every copy of a function and how they differ. Uses `report-refactoring.awk` |
 
 Notes:
@@ -100,6 +101,12 @@ One test run writes 16 run logs (it was 87 when the SQL and container helpers we
 Run `./scripts/collect-logs.sh` **before** `docker compose down`, because removing containers deletes their logs.
 Decisions (refusing or performing a promotion, changing sync mode) are logged as `DECISION:` / `CHANGE:` lines in the run log.
 Logs live inside this OneDrive folder; they are small text files, but set `LOG_DIR=/some/other/path` to keep them out of sync.
+
+## Patterns and diagrams
+
+The robustness patterns the scripts use (promotion guard, split-brain guard, verify after act) are explained in
+[docs/patterns/](docs/patterns/README.md). The role state machine and the 17-step failover sequence are in
+[docs/diagrams/](docs/diagrams/).
 
 ## What is proven
 

@@ -51,6 +51,7 @@ Re-run everything automated: `bash scripts/run-all-checks.sh` (lint of all scrip
 | ENG-01 | All shell scripts conform to the house Bash standard (version 7), shellcheck and syntax checks | **Proven (auto)** | `run-all-checks.sh`: `PASS lint` (22 files, including `runtime.sh`, which is checked word for word against the standard) |
 | ENG-02 | All docker and database calls live in libraries; no script outside `lib/` runs `docker` or `psql`. The standard's own functions come from one shared `runtime.sh` | **Proven (manual)** | Search of `pg-replication/scripts/` found only usage text. 16 host scripts import `runtime.sh`; about 945 lines of duplicated function bodies were removed (2026-11-15) |
 | ENG-03 | No secrets in the repository or its history; the database ports are not exposed to the network | **Proven (manual)** | 2026-11-14: pattern scan of all files and both commits found no tokens or keys (only the documented throwaway credentials); ports bound to `127.0.0.1` and **closed on the LAN address**, open on localhost |
+| ENG-04 | The robustness pattern pages and diagrams point at real files, functions and the right file for each function | **Proven (auto)** | `check-docs.sh` in `run-all-checks.sh`. Checked with three injected faults in a scratch copy (a missing page, an undefined function, a function cited in the wrong file) and a broken root-level link: each reported, exit 1 |
 
 ## 4. Gaps: not proven yet
 
