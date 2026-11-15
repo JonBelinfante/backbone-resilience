@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Merge the run logs of one run folder into a single timeline, with script names added.
 # Usage: merge-run-logs.sh [-h | --help] [--dir FOLDER]
-# Requires: cat date find mktemp rm sed sort
+# Requires: cat find sed sort
 # Exit codes: 0 timeline printed, 1 failure (for example no run folder), 2 usage error
 
 set -Eeuo pipefail
@@ -15,51 +15,17 @@ fi
 shopt -s inherit_errexit
 export LC_COLLATE=C
 
-# Environment: RUN_LOG_DIR is where run folders are looked for when --dir is not given; it defaults
-# to the temporary directory and must exist.
-readonly RUN_LOG_DIR="${RUN_LOG_DIR:-${TMPDIR:-/tmp}}"
+# Environment: FOLDER_PARENT is where run folders are looked for when --dir is not given
+# (default: RUN_LOG_DIR).
+readonly FOLDER_PARENT="${FOLDER_PARENT:-${RUN_LOG_DIR}}"
 
 readonly SCRIPT_NAME="${0##*/}"
-declare RUN_LOG=''
-declare -a CLEANUP_PATHS=()
+# SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
+# started by its bare name), so paths to sibling files work however the script is started.
+readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 
-# Append a line to the run log and, for WARN and ERROR, to standard error.
-log() {
-  local level="${1:?level required}"
-  local message="${2:?message required}"
-  local now="${EPOCHREALTIME}"
-  local fraction="${now#*[.,]}"
-  local stamp
-  local line
-
-  TZ=UTC printf -v stamp '%(%Y-%m-%dT%H:%M:%S)T' "${now%%[.,]*}"
-  line="${stamp}.${fraction:0:3}Z ${level} ${message}"
-  if [[ -n "${RUN_LOG}" ]]; then
-    printf '%s\n' "${line}" >> "${RUN_LOG}"
-  fi
-  if [[ "${level}" != 'INFO' ]]; then
-    printf '%s: %s\n' "${SCRIPT_NAME}" "${line}" >&2
-  fi
-}
-
-# Log an error, then exit with the given status.
-die() {
-  local status="${1:?status required}"
-  local message="${2:?message required}"
-
-  log ERROR "${message}"
-  exit "${status}"
-}
-
-# Log where a command failed: its line, the function it was in, and the command itself.
-on_error() {
-  local status="${?}"
-  local line_no="${1:?line required}"
-  local command_text="${2:?command required}"
-  local where="${FUNCNAME[1]:-main}"
-
-  log ERROR "failed (status ${status}) at line ${line_no} in ${where}: ${command_text}"
-}
+# shellcheck source=./runtime.sh
+source "${SCRIPT_DIR}runtime.sh"
 
 # Print how to run this script.
 usage() {
@@ -75,38 +41,11 @@ name comes from the log's file name. Lines with equal timestamps keep each file'
 Run log timestamps are UTC to the millisecond, and the sort uses them as written. Lines with
 the same millisecond keep each file's own order.
 
-Environment: RUN_LOG_DIR is where the newest run folder is looked for (default: temporary directory).
+Environment: FOLDER_PARENT is where the newest run folder is looked for (default: RUN_LOG_DIR).
+RUN_LOG_DIR is the run log directory (default: temporary directory).
 
 Exit codes: 0 timeline printed, 1 failure (for example no run folder), 2 usage error
 USAGE
-}
-
-# Fail early if a required command is missing.
-require_commands() {
-  local cmd
-
-  for cmd in "$@"; do
-    command -v "${cmd}" > /dev/null || die 1 "missing required command: ${cmd}"
-  done
-}
-
-# Create this run's log file in RUN_LOG_DIR and record the start.
-start_run_log() {
-  local stamp
-
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  RUN_LOG="$(mktemp "${RUN_LOG_DIR}/${SCRIPT_NAME}-${stamp}.XXXXXX")"
-  log INFO "started ${SCRIPT_NAME}"
-}
-
-# Record how the run ended, then remove temporary files created by this script.
-cleanup() {
-  local status="${?}"
-
-  log INFO "finished with status ${status}"
-  if (( ${#CLEANUP_PATHS[@]} > 0 )); then
-    rm -f -- "${CLEANUP_PATHS[@]}"
-  fi
 }
 
 # Print the newest run folder in RUN_LOG_DIR (the names start with a UTC time).
@@ -115,12 +54,12 @@ find_newest_folder() {
   local listing
   local -a folders
 
-  listing="$(find "${RUN_LOG_DIR}" -maxdepth 1 -type d -name 'run-*' | sort)"
+  listing="$(find "${FOLDER_PARENT}" -maxdepth 1 -type d -name 'run-*' | sort)"
   if [[ -n "${listing}" ]]; then
     mapfile -t folders <<< "${listing}"
     printf '%s\n' "${folders[-1]}"
   else
-    die 1 "no run-* folder found in ${RUN_LOG_DIR}"
+    die 1 "no run-* folder found in ${FOLDER_PARENT}"
   fi
 }
 
@@ -165,9 +104,7 @@ print_timeline() {
 # Script entry point.
 main() {
   local folder=''
-
-  require_commands cat date find mktemp rm sed sort
-  start_run_log
+  start_run_log "$@"
 
   while (( $# > 0 )); do
     case "${1}" in
@@ -194,6 +131,7 @@ main() {
   done
 
   (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
+  require_commands cat find sed sort
   if [[ -z "${folder}" ]]; then
     folder="$(find_newest_folder)"
   fi
@@ -203,5 +141,7 @@ main() {
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 trap cleanup EXIT
+
+trap_signals
 
 main "$@"

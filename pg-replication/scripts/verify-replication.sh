@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Prove that the standby is streaming WAL from the primary and replaying it.
 # Usage: verify-replication.sh [-h | --help]
-# Requires: cat date head mktemp rm sleep
+# Requires: cat head sleep
 # Exit codes: 0 all checks passed, 1 a check failed, 2 usage or configuration error
 set -Eeuo pipefail
 
@@ -14,10 +14,8 @@ fi
 shopt -s inherit_errexit
 
 # Environment: PRIMARY_CONTAINER and STANDBY_CONTAINER name the two containers.
-# RUN_LOG_DIR defaults to the temporary directory and must exist.
 readonly PRIMARY_CONTAINER="${PRIMARY_CONTAINER:-pg-primary}"
 readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
-readonly RUN_LOG_DIR="${RUN_LOG_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
@@ -26,58 +24,10 @@ readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 readonly POLL_ATTEMPTS=100
 readonly POLL_PAUSE='0.1'
 
+# shellcheck source=./runtime.sh
+source "${SCRIPT_DIR}runtime.sh"
 # shellcheck source=../lib/database.sh
 source "${SCRIPT_DIR}../lib/database.sh"
-
-declare RUN_LOG=''
-declare -a CLEANUP_PATHS=()
-
-# Append a line to the run log and, for WARN and ERROR, to standard error.
-log() {
-  local level="${1:?level required}"
-  local message="${2:?message required}"
-  local now="${EPOCHREALTIME}"
-  local fraction="${now#*[.,]}"
-  local stamp
-  local line
-
-  TZ=UTC printf -v stamp '%(%Y-%m-%dT%H:%M:%S)T' "${now%%[.,]*}"
-  line="${stamp}.${fraction:0:3}Z ${level} ${message}"
-  if [[ -n "${RUN_LOG}" ]]; then
-    printf '%s\n' "${line}" >> "${RUN_LOG}"
-  fi
-  if [[ "${level}" != 'INFO' ]]; then
-    printf '%s: %s\n' "${SCRIPT_NAME}" "${line}" >&2
-  fi
-}
-
-# Log an error, then exit with the given status.
-die() {
-  local status="${1:?status required}"
-  local message="${2:?message required}"
-
-  log ERROR "${message}"
-  exit "${status}"
-}
-
-# Log where a command failed: its line, the function it was in, and the command itself.
-on_error() {
-  local status="${?}"
-  local line_no="${1:?line required}"
-  local command_text="${2:?command required}"
-  local where="${FUNCNAME[1]:-main}"
-
-  log ERROR "failed (status ${status}) at line ${line_no} in ${where}: ${command_text}"
-}
-
-# Fail early if a required command is missing.
-require_commands() {
-  local cmd
-
-  for cmd in "$@"; do
-    command -v "${cmd}" > /dev/null || die 1 "missing required command: ${cmd}"
-  done
-}
 
 # Print how to run this script.
 usage() {
@@ -102,25 +52,6 @@ Environment:
 
 Exit codes: 0 all checks passed, 1 a check failed, 2 usage or configuration error
 USAGE
-}
-
-# Create this run's log file in RUN_LOG_DIR and record the start.
-start_run_log() {
-  local stamp
-
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  RUN_LOG="$(mktemp "${RUN_LOG_DIR}/${SCRIPT_NAME}-${stamp}.XXXXXX")"
-  log INFO "started ${SCRIPT_NAME}"
-}
-
-# Record how the run ended, then remove temporary files created by this script.
-cleanup() {
-  local status="${?}"
-
-  log INFO "finished with status ${status}"
-  if (( ${#CLEANUP_PATHS[@]} > 0 )); then
-    rm -f -- "${CLEANUP_PATHS[@]}"
-  fi
 }
 
 # Print a section heading.
@@ -279,8 +210,7 @@ check_wal_positions() {
 
 # Script entry point.
 main() {
-  require_commands cat date head mktemp rm sleep
-  start_run_log
+  start_run_log "$@"
 
   while (( $# > 0 )); do
     case "${1}" in
@@ -302,6 +232,7 @@ main() {
   done
 
   (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
+  require_commands cat head sleep
 
   check_roles
   check_streaming
@@ -313,5 +244,7 @@ main() {
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 trap cleanup EXIT
+
+trap_signals
 
 main "$@"

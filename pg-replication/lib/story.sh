@@ -1,11 +1,12 @@
 # script-kind: library
 # Purpose: Tell a test's story: timestamped lines on the terminal and in the run log, and checks.
 # Usage: source "${SCRIPT_DIR}../lib/story.sh", then call story::narrate and the other functions
-# Requires: die log
+# Requires: none
+# Depends: container database
 # Exit codes: none (the functions return, or call die of the script that imported them)
 
 # Tell the story: print one line (UTC time in ms, script name, message) and log the message.
-# The importing script must define log, which writes to its run log.
+# Assumes the importing script supplies log.
 story::narrate() {
   local message="${1:?message required}"
   local now="${EPOCHREALTIME}"
@@ -57,4 +58,49 @@ story::expect_equal() {
     die 1 "FAIL: ${label} (expected '${expected}', got '${actual}')"
   fi
   story::narrate "PASS: ${label} (got '${actual}')"
+}
+
+# Run a SQL statement that changes data, narrating the SQL and the command tag it returns.
+story::run_statement() {
+  local container="${1:?container required}"
+  local sql="${2:?sql required}"
+
+  story::narrate "SQL on ${container}: ${sql}"
+  database::run "${container}" <<< "${sql}" 2>&1 | story::narrate_stream
+}
+
+# Run a read-only query, narrate the SQL and the data returned, then check the answer.
+story::expect_query() {
+  local container="${1:?container required}"
+  local sql="${2:?sql required}"
+  local expected="${3-}"
+  local actual
+
+  actual="$(database::bare "${container}" <<< "${sql}")"
+  story::narrate_query "${container}" "${sql}" "${actual}"
+  story::expect_equal "${container} returned the expected data" "${actual}" "${expected}"
+}
+
+# Pass if the container is stopped.
+story::expect_stopped() {
+  local container="${1:?container required}"
+  local running
+
+  running="$(container::is_running "${container}")"
+  story::narrate "container::is_running ${container} => ${running}"
+  story::expect_equal "${container} is stopped" "${running}" 'false'
+}
+
+# Drop every table in a schema: the database library builds the statements, then they are run.
+# Usage: story::drop_all_tables CONTAINER SCHEMA
+story::drop_all_tables() {
+  local container="${1:?container required}"
+  local schema="${2:?schema required}"
+  local drops
+
+  drops="$(database::drop_all_sql "${container}" "${schema}")"
+  story::narrate_query "${container}" "drop every table in ${schema}" "${drops}"
+  if [[ -n "${drops}" ]]; then
+    story::run_statement "${container}" "${drops}"
+  fi
 }

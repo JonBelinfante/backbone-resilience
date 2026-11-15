@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Check every shell script in the repository against the Bash standard.
 # Usage: lint-scripts.sh [-h | --help]
-# Requires: bash cat date find mktemp python3 rm shellcheck sort
+# Requires: bash cat find grep python3 shellcheck sort
 # Exit codes: 0 all clean, 1 problems found, 2 usage or configuration error, 3 required tool missing
 set -Eeuo pipefail
 
@@ -15,53 +15,17 @@ shopt -s inherit_errexit
 export LC_COLLATE=C
 
 # Environment: BASHCHECK_WRAPPER is required (checked in check_environment); see usage.
-# RUN_LOG_DIR defaults to the temporary directory and must exist.
 readonly BASHCHECK_WRAPPER="${BASHCHECK_WRAPPER:-}"
-readonly RUN_LOG_DIR="${RUN_LOG_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly REPO_ROOT="${0%"${0##*/}"}../.."
+# SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
+# started by its bare name), so paths to sibling files work however the script is started.
+readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
+readonly REPO_ROOT="${SCRIPT_DIR}../.."
 readonly EXIT_MISSING_TOOL=3
-declare RUN_LOG=''
-declare -a CLEANUP_PATHS=()
 
-# Append a line to the run log and, for WARN and ERROR, to standard error.
-log() {
-  local level="${1:?level required}"
-  local message="${2:?message required}"
-  local now="${EPOCHREALTIME}"
-  local fraction="${now#*[.,]}"
-  local stamp
-  local line
-
-  TZ=UTC printf -v stamp '%(%Y-%m-%dT%H:%M:%S)T' "${now%%[.,]*}"
-  line="${stamp}.${fraction:0:3}Z ${level} ${message}"
-  if [[ -n "${RUN_LOG}" ]]; then
-    printf '%s\n' "${line}" >> "${RUN_LOG}"
-  fi
-  if [[ "${level}" != 'INFO' ]]; then
-    printf '%s: %s\n' "${SCRIPT_NAME}" "${line}" >&2
-  fi
-}
-
-# Log an error, then exit with the given status.
-die() {
-  local status="${1:?status required}"
-  local message="${2:?message required}"
-
-  log ERROR "${message}"
-  exit "${status}"
-}
-
-# Log where a command failed: its line, the function it was in, and the command itself.
-on_error() {
-  local status="${?}"
-  local line_no="${1:?line required}"
-  local command_text="${2:?command required}"
-  local where="${FUNCNAME[1]:-main}"
-
-  log ERROR "failed (status ${status}) at line ${line_no} in ${where}: ${command_text}"
-}
+# shellcheck source=./runtime.sh
+source "${SCRIPT_DIR}runtime.sh"
 
 # Print how to run this script.
 usage() {
@@ -103,27 +67,9 @@ check_environment() {
   done
 }
 
-# Create this run's log file in RUN_LOG_DIR and record the start.
-start_run_log() {
-  local stamp
-
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  RUN_LOG="$(mktemp "${RUN_LOG_DIR}/${SCRIPT_NAME}-${stamp}.XXXXXX")"
-  log INFO "started ${SCRIPT_NAME}"
-}
-
-# Record how the run ended, then remove temporary files created by this script.
-cleanup() {
-  local status="${?}"
-
-  log INFO "finished with status ${status}"
-  if (( ${#CLEANUP_PATHS[@]} > 0 )); then
-    rm -f -- "${CLEANUP_PATHS[@]}"
-  fi
-}
-
 # Print the path of every shell script in the repository, one per line.
 list_shell_scripts() {
+  log INFO 'list shell scripts'
   find "${REPO_ROOT}" -name '*.sh' -not -path '*/.git/*' -not -path '*/logs/*' | sort
 }
 
@@ -159,17 +105,35 @@ check_syntax() {
   report PASS 'bash syntax'
 }
 
-# Static analysis of the given scripts with shellcheck, following sourced files.
+# Run shellcheck on each file. The standard's own text is exempt from two warnings that are
+# intended there: runtime.sh reads SCRIPT_NAME, which the importing script sets (SC2154), and a
+# copy of trap_signals expands a loop variable into a trap on purpose (SC2064). A file gets the
+# exemption only if it carries that standard text, so the exemption cannot hide anything else.
 check_shellcheck() {
-  if shellcheck -x "$@"; then
-    report PASS 'shellcheck'
-  else
+  local file
+  local failed='no'
+  local -a exempt=()
+
+  for file in "$@"; do
+    exempt=()
+    if [[ "${file##*/}" == 'runtime.sh' ]]; then
+      exempt+=(-e SC2154)
+    fi
+    if grep -q '^trap_signals() {' "${file}"; then
+      exempt+=(-e SC2064)
+    fi
+    if ! shellcheck -x "${exempt[@]}" "${file}"; then
+      failed='yes'
+    fi
+  done
+  if [[ "${failed}" == 'yes' ]]; then
     report FAIL 'shellcheck'
     return 1
   fi
+  report PASS 'shellcheck'
 }
 
-# Check the given scripts against the Bash standard with bashcheck.
+# Run the Bash standard checker on the given files.
 check_standard() {
   if python3 "${BASHCHECK_WRAPPER}/check.py" --plan --root "${REPO_ROOT}" "$@"; then
     report PASS 'bash standard'
@@ -181,6 +145,7 @@ check_standard() {
 
 # Run the three checks over the given scripts; stop with status 1 if any of them fails.
 lint_scripts() {
+  log INFO 'linting the shell scripts'
   local problems=0
 
   check_syntax "$@" || problems=$(( problems + 1 ))
@@ -195,8 +160,7 @@ lint_scripts() {
 main() {
   local listing
   local -a scripts=()
-
-  start_run_log
+  start_run_log "$@"
 
   while (( $# > 0 )); do
     case "${1}" in
@@ -219,6 +183,7 @@ main() {
 
   (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
   check_environment
+  require_commands bash cat find grep python3 shellcheck sort
 
   listing="$(list_shell_scripts)"
   if [[ -n "${listing}" ]]; then
@@ -231,5 +196,7 @@ main() {
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 trap cleanup EXIT
+
+trap_signals
 
 main "$@"

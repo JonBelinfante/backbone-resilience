@@ -1,7 +1,7 @@
 # script-kind: library
 # Purpose: Every database call for the containers: run SQL, ask the role, check readiness.
 # Usage: source "${SCRIPT_DIR}../lib/database.sh", then call database::run, bare, in_recovery ...
-# Requires: die docker
+# Requires: docker
 # Exit codes: none (the functions return, or call die of the script that imported them)
 
 readonly DATABASE_NAME_PATTERN='^[A-Za-z0-9][A-Za-z0-9_.-]*$'

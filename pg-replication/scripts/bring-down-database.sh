@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Stop the primary or the standby database container and confirm it is down.
 # Usage: bring-down-database.sh [-h | --help] --database primary|standby
-# Requires: cat date mktemp rm
+# Requires: cat
 # Exit codes: 0 success, 1 failure, 2 usage or configuration error
 
 set -Eeuo pipefail
@@ -16,10 +16,8 @@ shopt -s inherit_errexit
 
 # Environment: PRIMARY_CONTAINER and STANDBY_CONTAINER name the two containers as compose created
 # them (they keep these names after a failover, whatever their role then is).
-# RUN_LOG_DIR defaults to the temporary directory and must exist.
 readonly PRIMARY_CONTAINER="${PRIMARY_CONTAINER:-pg-primary}"
 readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
-readonly RUN_LOG_DIR="${RUN_LOG_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
@@ -27,49 +25,10 @@ readonly SCRIPT_NAME="${0##*/}"
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 readonly STOP_TIMEOUT_SECONDS=30
 
+# shellcheck source=./runtime.sh
+source "${SCRIPT_DIR}runtime.sh"
 # shellcheck source=../lib/container.sh
 source "${SCRIPT_DIR}../lib/container.sh"
-
-declare RUN_LOG=''
-declare -a CLEANUP_PATHS=()
-
-# Append a line to the run log and, for WARN and ERROR, to standard error.
-log() {
-  local level="${1:?level required}"
-  local message="${2:?message required}"
-  local now="${EPOCHREALTIME}"
-  local fraction="${now#*[.,]}"
-  local stamp
-  local line
-
-  TZ=UTC printf -v stamp '%(%Y-%m-%dT%H:%M:%S)T' "${now%%[.,]*}"
-  line="${stamp}.${fraction:0:3}Z ${level} ${message}"
-  if [[ -n "${RUN_LOG}" ]]; then
-    printf '%s\n' "${line}" >> "${RUN_LOG}"
-  fi
-  if [[ "${level}" != 'INFO' ]]; then
-    printf '%s: %s\n' "${SCRIPT_NAME}" "${line}" >&2
-  fi
-}
-
-# Log an error, then exit with the given status.
-die() {
-  local status="${1:?status required}"
-  local message="${2:?message required}"
-
-  log ERROR "${message}"
-  exit "${status}"
-}
-
-# Log where a command failed: its line, the function it was in, and the command itself.
-on_error() {
-  local status="${?}"
-  local line_no="${1:?line required}"
-  local command_text="${2:?command required}"
-  local where="${FUNCNAME[1]:-main}"
-
-  log ERROR "failed (status ${status}) at line ${line_no} in ${where}: ${command_text}"
-}
 
 # Print how to run this script.
 usage() {
@@ -92,34 +51,6 @@ Environment:
 
 Exit codes: 0 success, 1 failure, 2 usage or configuration error
 USAGE
-}
-
-# Fail early if a required command is missing.
-require_commands() {
-  local cmd
-
-  for cmd in "$@"; do
-    command -v "${cmd}" > /dev/null || die 1 "missing required command: ${cmd}"
-  done
-}
-
-# Create this run's log file in RUN_LOG_DIR and record the start.
-start_run_log() {
-  local stamp
-
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  RUN_LOG="$(mktemp "${RUN_LOG_DIR}/${SCRIPT_NAME}-${stamp}.XXXXXX")"
-  log INFO "started ${SCRIPT_NAME}"
-}
-
-# Record how the run ended, then remove temporary files created by this script.
-cleanup() {
-  local status="${?}"
-
-  log INFO "finished with status ${status}"
-  if (( ${#CLEANUP_PATHS[@]} > 0 )); then
-    rm -f -- "${CLEANUP_PATHS[@]}"
-  fi
 }
 
 # Fail unless the container is stopped.
@@ -154,9 +85,7 @@ bring_down() {
 # Script entry point.
 main() {
   local database=''
-
-  require_commands cat date mktemp rm
-  start_run_log
+  start_run_log "$@"
 
   while (( $# > 0 )); do
     case "${1}" in
@@ -190,5 +119,7 @@ main() {
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 trap cleanup EXIT
+
+trap_signals
 
 main "$@"

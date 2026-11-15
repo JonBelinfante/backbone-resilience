@@ -7,7 +7,7 @@
 | **Raised** | 2026-11-14 |
 | **Applies to** | bash-standard plugin 0.4.1, Bash standard version 5 (165 rules) |
 | **Type** | Enhancement to the standard and its checker |
-| **Status** | Proposed |
+| **Status** | CR-1 to CR-7 implemented in plugin 0.5.0 (standard version 6); CR-8 implemented in plugin 0.7.0 (standard version 7); further observations in section 10 |
 | **Result if accepted** | Standard version 6 |
 
 ## 1. Summary
@@ -185,3 +185,67 @@ A prototype ran the six functions from a shared library with a script that impor
 with the per-script copies for: a normal run, `die`, `die` inside a command substitution, a failing command inside
 a function, and a missing library. Exit status, standard-error output, run-log content and clean-up were
 identical in each case, except that a missing library stops at the import line with Bash's own message.
+
+## 10. Outcome and follow-up observations (2026-11-15)
+
+Result of this request in plugin 0.5.0:
+
+| # | Result |
+|---|---|
+| CR-1 | **Implemented**, with a difference: `runtime.sh` must sit in the same folder as the script that imports it (LIB-005) and is checked word for word (LIB-004). It also holds `require_integer` |
+| CR-2 | **Implemented** as a `# Depends:` header line (LIB-003) |
+| CR-3 | **Implemented** (REQ-004), for large scripts |
+| CR-4 | **Implemented**: `mktemp -d` is allowed and `cleanup` removes with `rm -rf` |
+| CR-5 | **Implemented**: BAN-013 reports `-c` only when it is the shell's own option |
+| CR-6 | **Partly**: `runtime.sh` is in the examples; there is still no small non-runtime library with an importing script |
+| CR-7 | **Implemented** in the skill text |
+
+Observations from applying the change to a real codebase, as candidates for a follow-up request:
+
+1. **CFG-005 does not exempt names the runtime library provides.** A script that imports `runtime.sh` cannot read
+   `RUN_LOG_DIR` inside a function (flagged as an environment read), although `RUN_LOG_DIR` is the runtime's own
+   documented setting. Scripts that need the log folder for another purpose had to import a second variable whose
+   default is `${RUN_LOG_DIR}`. Suggested: treat the names the runtime library declares (`RUN_LOG_DIR`, `RUN_LOG`,
+   `INTEGER_PATTERN`) as set at the top level of any script that imports it.
+2. **A library reading `SCRIPT_NAME` is flagged by CFG-005**, although the skill says a library may assume
+   `SCRIPT_NAME` exists. Suggested: exempt `SCRIPT_NAME`, `log` and `die` in libraries, or change the text.
+3. **ShellCheck warns SC2154 on `runtime.sh`** (it reads `SCRIPT_NAME`, which the importing script sets). The file cannot
+   be edited, so a project must disable that one code for that file in its own tooling. Suggested: add a
+   `# shellcheck disable=SC2154` line to the standard's `runtime.sh`, or document the exception.
+4. **A medium script that falls into the large tier after a small edit** starts failing REQ-004 and OBS-006 at once.
+   Suggested: report the tier in the checker's output, so the cause is clear.
+
+### CR-8. Run log files end in `.log` (Should; raised 2026-11-15; implemented in standard version 7)
+
+**Outcome (2026-11-15).** Implemented by approach 1: the file is created with the existing template, renamed to end in `.log`, and the new path is the one registered for clean-up. The reference names it `<script>-<time>-<process id>.XXXXXX`, then renames it.
+
+**Current.** `start_run_log` in the runtime library creates the run log with
+`mktemp "${RUN_LOG_DIR}/${SCRIPT_NAME}-${stamp}.XXXXXX"`, so a file is named like `name.sh-20261113T094018Z.oEkFeV`:
+it ends in random characters and has no extension. SEC-001 requires the `mktemp` template to end in `XXXXXX`, and
+LIB-004 requires the library text to match the standard word for word, so a project cannot add a suffix itself. The
+small-script form (TIR-003) already uses a `.log` name, so the two forms are inconsistent.
+
+**Requested.** Run log file names end in `.log`, for example `<script>-<UTC time>.<random>.log`.
+
+Possible ways, in order of preference:
+1. Create the file with the existing template, then rename it by appending `.log`, point `RUN_LOG` at the new
+   path, and register the new path (not the old one) in `CLEANUP_PATHS`. Portable, because it does not rely on a
+   suffix after the `X` characters.
+2. Allow a suffix after the `X` characters. Not portable: BSD `mktemp` (macOS) requires the template to end in the
+   `X` characters, while GNU `mktemp` accepts a suffix only with `--suffix`.
+3. Build a unique name without `mktemp`. Rejected: SEC-001 forbids names built from `$$`, `$RANDOM` or `date`.
+
+**Rules affected.** OBS-001 (run-log naming), SEC-001 and ERR-004 (the `mktemp` pattern and registration), LIB-004
+(canonical text of the runtime library), TIR-003 (keep the small form consistent).
+
+**Rationale.** Editors, viewers and log tools recognise `.log`; a pattern such as `*.log` then matches every run log
+for listing, ignoring (version control, rotation) and archiving; it is consistent with the small form and with
+conventional log naming.
+
+**Acceptance.** After a run, `RUN_LOG_DIR` contains `<script>-<time>.<random>.log` for each run, on Linux, macOS and
+Git Bash; `*.log` matches all run logs; clean-up and the final "finished with status" line are unaffected; the
+checker accepts the new canonical text and rejects the old one.
+
+**Compatibility.** Tools that derive the script name from the file name by stripping from the timestamp onward are
+unaffected. Tools that match the whole name or the end of it need a one-line update. Part of the next standard
+version.

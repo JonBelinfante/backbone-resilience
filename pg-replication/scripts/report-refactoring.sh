@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Report duplicated functions, script reuse and script sizes, to guide refactoring.
 # Usage: report-refactoring.sh [-h | --help] [--mode MODE] [--show NAME]
-# Requires: awk cat date diff find mktemp rm sed sort
+# Requires: awk cat diff find mktemp sed sort
 # Exit codes: 0 report written, 1 failure, 2 usage or configuration error
 
 set -Eeuo pipefail
@@ -15,8 +15,8 @@ fi
 shopt -s inherit_errexit
 export LC_COLLATE=C
 
-# Environment: RUN_LOG_DIR defaults to the temporary directory and must exist.
-readonly RUN_LOG_DIR="${RUN_LOG_DIR:-${TMPDIR:-/tmp}}"
+# Environment: TEMP_DIR is where the comparison file is written (default: the temporary directory).
+readonly TEMP_DIR="${TEMP_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
@@ -26,52 +26,16 @@ readonly ROOT_DIR="${SCRIPT_DIR}.."
 readonly BASELINE_PATH="${ROOT_DIR}/refactor-baseline.txt"
 readonly NAME_PATTERN='^[a-z_0-9]+$'
 readonly AWK_PROGRAM="${SCRIPT_DIR}report-refactoring.awk"
-readonly TEMPLATE_FUNCTIONS='log die on_error usage start_run_log cleanup main require_commands'
-readonly MANDATED_FUNCTIONS="${TEMPLATE_FUNCTIONS} check_environment"
+readonly TEMPLATE_FUNCTIONS='log die on_error usage start_run_log cleanup main'
+readonly RUNTIME_FUNCTIONS='require_commands require_integer'
+readonly MANDATED_FUNCTIONS="${TEMPLATE_FUNCTIONS} ${RUNTIME_FUNCTIONS} check_environment"
 readonly LINE_LIMIT=400
 readonly LINE_WARNING=300
 readonly SIMILARITY_PERCENT=60
 readonly MINIMUM_STATEMENTS=5
-declare RUN_LOG=''
-declare -a CLEANUP_PATHS=()
 
-# Append a line to the run log and, for WARN and ERROR, to standard error.
-log() {
-  local level="${1:?level required}"
-  local message="${2:?message required}"
-  local now="${EPOCHREALTIME}"
-  local fraction="${now#*[.,]}"
-  local stamp
-  local line
-
-  TZ=UTC printf -v stamp '%(%Y-%m-%dT%H:%M:%S)T' "${now%%[.,]*}"
-  line="${stamp}.${fraction:0:3}Z ${level} ${message}"
-  if [[ -n "${RUN_LOG}" ]]; then
-    printf '%s\n' "${line}" >> "${RUN_LOG}"
-  fi
-  if [[ "${level}" != 'INFO' ]]; then
-    printf '%s: %s\n' "${SCRIPT_NAME}" "${line}" >&2
-  fi
-}
-
-# Log an error, then exit with the given status.
-die() {
-  local status="${1:?status required}"
-  local message="${2:?message required}"
-
-  log ERROR "${message}"
-  exit "${status}"
-}
-
-# Log where a command failed: its line, the function it was in, and the command itself.
-on_error() {
-  local status="${?}"
-  local line_no="${1:?line required}"
-  local command_text="${2:?command required}"
-  local where="${FUNCNAME[1]:-main}"
-
-  log ERROR "failed (status ${status}) at line ${line_no} in ${where}: ${command_text}"
-}
+# shellcheck source=./runtime.sh
+source "${SCRIPT_DIR}runtime.sh"
 
 # Print how to run this script.
 usage() {
@@ -92,38 +56,11 @@ Modes (default all):
   --show NAME print every copy of function NAME and how the copies differ
 Workflow: brief, then --show NAME, refactor, then changes. Functions named a::b are not seen.
 
-Environment: RUN_LOG_DIR is the run log directory (default: temporary directory).
+Environment: TEMP_DIR is where the comparison file is written (default: temporary directory).
+RUN_LOG_DIR is the run log directory (default: temporary directory).
 
 Exit codes: 0 report written, 1 failure, 2 usage or configuration error
 USAGE
-}
-
-# Fail early if a required command is missing.
-require_commands() {
-  local cmd
-
-  for cmd in "$@"; do
-    command -v "${cmd}" > /dev/null || die 1 "missing required command: ${cmd}"
-  done
-}
-
-# Create this run's log file in RUN_LOG_DIR and record the start.
-start_run_log() {
-  local stamp
-
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  RUN_LOG="$(mktemp "${RUN_LOG_DIR}/${SCRIPT_NAME}-${stamp}.XXXXXX")"
-  log INFO "started ${SCRIPT_NAME}"
-}
-
-# Record how the run ended, then remove temporary files created by this script.
-cleanup() {
-  local status="${?}"
-
-  log INFO "finished with status ${status}"
-  if (( ${#CLEANUP_PATHS[@]} > 0 )); then
-    rm -f -- "${CLEANUP_PATHS[@]}"
-  fi
 }
 
 # List every shell script under the repository root, one path per line, sorted.
@@ -269,7 +206,7 @@ report_changes() {
   if [[ ! -f "${BASELINE_PATH}" ]]; then
     die 1 "no baseline at ${BASELINE_PATH}: run with --mode baseline first"
   fi
-  current_file="$(mktemp "${RUN_LOG_DIR}/${SCRIPT_NAME}-current.XXXXXX")"
+  current_file="$(mktemp "${TEMP_DIR}/${SCRIPT_NAME}-current.XXXXXX")"
   CLEANUP_PATHS+=("${current_file}")
   stable_brief "${scripts[@]}" > "${current_file}"
   if changes="$(diff "${BASELINE_PATH}" "${current_file}")"; then
@@ -340,10 +277,7 @@ write_reports() {
 main() {
   local mode='all'
   local name=''
-
-  require_commands awk cat date diff find mktemp rm sed sort
-  start_run_log
-
+  start_run_log "$@"
   while (( $# > 0 )); do
     case "${1}" in
       -h | --help)
@@ -375,10 +309,13 @@ main() {
   done
 
   (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
+  require_commands awk cat diff find mktemp sed sort
   write_reports "${mode}" "$(list_shell_scripts)" "${name}"
 }
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 trap cleanup EXIT
+
+trap_signals
 
 main "$@"

@@ -1,7 +1,7 @@
 # Proposal: one runtime library for the Bash standard
 
-**For:** the author of the bash-standard plugin. **Status:** proposal, prototyped and run; design decisions taken
-(plain names, no version pin); waiting for the plugin to accept it. Not applied to any script.
+**For:** the author of the bash-standard plugin. **Status:** **accepted** in bash-standard 0.5.0 (standard version 6) on 2026-11-15, with differences noted below, and
+applied to the host scripts. Kept for the reasoning and the prototype evidence.
 **Date:** 2026-11-14. **Standard version it was tried against:** 5.
 
 ## Problem
@@ -194,3 +194,18 @@ Mechanical, scripted, and verified by the regression net:
 
 The edit in step 2 is the same one done by hand in the prototype; it can be applied to the 18 scripts in one
 pass and reviewed as one commit.
+
+## Outcome (2026-11-15)
+
+The plugin accepted the proposal, with these differences from the draft above:
+
+- `runtime.sh` must sit in the **same folder as each script** and is imported with exactly `source "${SCRIPT_DIR}runtime.sh"`
+  (LIB-005). Here it lives in `pg-replication/scripts/`; the two container-side scripts keep their own copies, which the
+  standard still allows.
+- The library also holds `require_integer` and `INTEGER_PATTERN`; `start_run_log` checks for `date` and `mktemp` itself.
+- Plain names were adopted, and no version pinning was added, as decided.
+- `require_commands` moved to after the argument loop for large scripts (REQ-004).
+- Result in this repository: 16 host scripts migrated, about 945 lines of function bodies removed, all 22 files conform
+  to version 6, and the 17-step round trip passes.
+- Later, standard version 7 added `end_run_log`, `on_signal` and `trap_signals`, and required `start_run_log "$@"` first in
+  `main`. Every script was migrated to it on 2026-11-15; the two container-side scripts now carry those functions too.

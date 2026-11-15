@@ -1,7 +1,7 @@
 # script-kind: library
 # Purpose: Every docker call for the database containers: look them up, start, stop, wait, inspect.
 # Usage: source "${SCRIPT_DIR}../lib/container.sh", then call container::start, stop, health ...
-# Requires: die docker log sleep
+# Requires: docker sleep
 # Exit codes: none (the functions return, or call die of the script that imported them)
 
 readonly CONTAINER_NAME_PATTERN='^[A-Za-z0-9][A-Za-z0-9_.-]*$'

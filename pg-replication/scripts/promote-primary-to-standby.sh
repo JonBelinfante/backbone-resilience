@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Turn the stopped old primary into a standby of the current writable node (pg_rewind).
 # Usage: promote-primary-to-standby.sh [-h | --help]
-# Requires: bash cat date mktemp rm sleep
+# Requires: bash cat sleep
 # Exit codes: 0 success, 1 failure, 2 usage or configuration error
 
 set -Eeuo pipefail
@@ -17,13 +17,11 @@ shopt -s inherit_errexit
 # Environment: PRIMARY_CONTAINER is the stopped old primary that becomes a standby, and
 # STANDBY_CONTAINER is the node now accepting writes (named as compose created them).
 # The passwords are not configured here: they are read from the writable node's environment.
-# RUN_LOG_DIR defaults to the temporary directory and must exist.
 readonly PRIMARY_CONTAINER="${PRIMARY_CONTAINER:-pg-primary}"
 readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
 readonly REPLICATION_USER="${REPLICATION_USER:-replicator}"
 readonly STANDBY_NAME="${STANDBY_NAME:-standby1}"
 readonly STANDBY_SLOT="${STANDBY_SLOT:-standby1_slot}"
-readonly RUN_LOG_DIR="${RUN_LOG_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
@@ -33,51 +31,12 @@ readonly DATABASE_PORT=5432
 readonly STREAM_ATTEMPTS=30
 readonly STREAM_PAUSE_SECONDS=1
 
+# shellcheck source=./runtime.sh
+source "${SCRIPT_DIR}runtime.sh"
 # shellcheck source=../lib/container.sh
 source "${SCRIPT_DIR}../lib/container.sh"
 # shellcheck source=../lib/database.sh
 source "${SCRIPT_DIR}../lib/database.sh"
-
-declare RUN_LOG=''
-declare -a CLEANUP_PATHS=()
-
-# Append a line to the run log and, for WARN and ERROR, to standard error.
-log() {
-  local level="${1:?level required}"
-  local message="${2:?message required}"
-  local now="${EPOCHREALTIME}"
-  local fraction="${now#*[.,]}"
-  local stamp
-  local line
-
-  TZ=UTC printf -v stamp '%(%Y-%m-%dT%H:%M:%S)T' "${now%%[.,]*}"
-  line="${stamp}.${fraction:0:3}Z ${level} ${message}"
-  if [[ -n "${RUN_LOG}" ]]; then
-    printf '%s\n' "${line}" >> "${RUN_LOG}"
-  fi
-  if [[ "${level}" != 'INFO' ]]; then
-    printf '%s: %s\n' "${SCRIPT_NAME}" "${line}" >&2
-  fi
-}
-
-# Log an error, then exit with the given status.
-die() {
-  local status="${1:?status required}"
-  local message="${2:?message required}"
-
-  log ERROR "${message}"
-  exit "${status}"
-}
-
-# Log where a command failed: its line, the function it was in, and the command itself.
-on_error() {
-  local status="${?}"
-  local line_no="${1:?line required}"
-  local command_text="${2:?command required}"
-  local where="${FUNCNAME[1]:-main}"
-
-  log ERROR "failed (status ${status}) at line ${line_no} in ${where}: ${command_text}"
-}
 
 # Print how to run this script.
 usage() {
@@ -102,34 +61,6 @@ Environment:
 
 Exit codes: 0 success, 1 failure, 2 usage or configuration error
 USAGE
-}
-
-# Fail early if a required command is missing.
-require_commands() {
-  local cmd
-
-  for cmd in "$@"; do
-    command -v "${cmd}" > /dev/null || die 1 "missing required command: ${cmd}"
-  done
-}
-
-# Create this run's log file in RUN_LOG_DIR and record the start.
-start_run_log() {
-  local stamp
-
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  RUN_LOG="$(mktemp "${RUN_LOG_DIR}/${SCRIPT_NAME}-${stamp}.XXXXXX")"
-  log INFO "started ${SCRIPT_NAME}"
-}
-
-# Record how the run ended, then remove temporary files created by this script.
-cleanup() {
-  local status="${?}"
-
-  log INFO "finished with status ${status}"
-  if (( ${#CLEANUP_PATHS[@]} > 0 )); then
-    rm -f -- "${CLEANUP_PATHS[@]}"
-  fi
 }
 
 # Fail unless the old primary is stopped: pg_rewind needs a cleanly stopped server.
@@ -232,8 +163,7 @@ report_result() {
 
 # Script entry point.
 main() {
-  require_commands bash cat date mktemp rm sleep
-  start_run_log
+  start_run_log "$@"
 
   while (( $# > 0 )); do
     case "${1}" in
@@ -255,6 +185,7 @@ main() {
   done
 
   (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
+  require_commands bash cat sleep
   log INFO "DECISION: rebuilding ${PRIMARY_CONTAINER} as a standby of ${STANDBY_CONTAINER}"
   check_old_primary_stopped
   check_writer_is_writable
@@ -269,5 +200,7 @@ main() {
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 trap cleanup EXIT
+
+trap_signals
 
 main "$@"

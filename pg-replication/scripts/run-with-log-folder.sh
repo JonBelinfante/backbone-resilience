@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Run a command with one shared run-log folder, so every script it starts logs there.
 # Usage: run-with-log-folder.sh [-h | --help] [--merge] -- COMMAND [ARGUMENT ...]
-# Requires: bash cat date mkdir mktemp rm
+# Requires: bash cat date mkdir mktemp
 # Exit codes: 0 the command succeeded, 1 it failed, 2 usage or configuration error
 
 set -Eeuo pipefail
@@ -14,54 +14,16 @@ fi
 
 shopt -s inherit_errexit
 
-# Environment: RUN_LOG_DIR is where the shared run folder is created; it defaults to the temporary
-# directory and must exist.
-readonly RUN_LOG_DIR="${RUN_LOG_DIR:-${TMPDIR:-/tmp}}"
+# Environment: FOLDER_PARENT is where the shared run folder is created (default: RUN_LOG_DIR).
+readonly FOLDER_PARENT="${FOLDER_PARENT:-${RUN_LOG_DIR}}"
 
 readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
 # started by its bare name), so paths to sibling files work however the script is started.
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
-declare RUN_LOG=''
-declare -a CLEANUP_PATHS=()
 
-# Append a line to the run log and, for WARN and ERROR, to standard error.
-log() {
-  local level="${1:?level required}"
-  local message="${2:?message required}"
-  local now="${EPOCHREALTIME}"
-  local fraction="${now#*[.,]}"
-  local stamp
-  local line
-
-  TZ=UTC printf -v stamp '%(%Y-%m-%dT%H:%M:%S)T' "${now%%[.,]*}"
-  line="${stamp}.${fraction:0:3}Z ${level} ${message}"
-  if [[ -n "${RUN_LOG}" ]]; then
-    printf '%s\n' "${line}" >> "${RUN_LOG}"
-  fi
-  if [[ "${level}" != 'INFO' ]]; then
-    printf '%s: %s\n' "${SCRIPT_NAME}" "${line}" >&2
-  fi
-}
-
-# Log an error, then exit with the given status.
-die() {
-  local status="${1:?status required}"
-  local message="${2:?message required}"
-
-  log ERROR "${message}"
-  exit "${status}"
-}
-
-# Log where a command failed: its line, the function it was in, and the command itself.
-on_error() {
-  local status="${?}"
-  local line_no="${1:?line required}"
-  local command_text="${2:?command required}"
-  local where="${FUNCNAME[1]:-main}"
-
-  log ERROR "failed (status ${status}) at line ${line_no} in ${where}: ${command_text}"
-}
+# shellcheck source=./runtime.sh
+source "${SCRIPT_DIR}runtime.sh"
 
 # Print how to run this script.
 usage() {
@@ -77,38 +39,11 @@ run log into that one folder instead of scattering files. Afterwards it prints t
 Example:
   run-with-log-folder.sh --merge -- bash scripts/test-failover-roundtrip.sh
 
-Environment: RUN_LOG_DIR is the folder the run folder is created in (default: temporary directory).
+Environment: FOLDER_PARENT is the folder the run folder is created in (default: RUN_LOG_DIR).
+RUN_LOG_DIR is the run log directory (default: temporary directory).
 
 Exit codes: 0 the command succeeded, 1 it failed, 2 usage or configuration error
 USAGE
-}
-
-# Fail early if a required command is missing.
-require_commands() {
-  local cmd
-
-  for cmd in "$@"; do
-    command -v "${cmd}" > /dev/null || die 1 "missing required command: ${cmd}"
-  done
-}
-
-# Create this run's log file in RUN_LOG_DIR and record the start.
-start_run_log() {
-  local stamp
-
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  RUN_LOG="$(mktemp "${RUN_LOG_DIR}/${SCRIPT_NAME}-${stamp}.XXXXXX")"
-  log INFO "started ${SCRIPT_NAME}"
-}
-
-# Record how the run ended, then remove temporary files created by this script.
-cleanup() {
-  local status="${?}"
-
-  log INFO "finished with status ${status}"
-  if (( ${#CLEANUP_PATHS[@]} > 0 )); then
-    rm -f -- "${CLEANUP_PATHS[@]}"
-  fi
 }
 
 # Run the command with RUN_LOG_DIR set to the shared folder and wait for it; fail if it fails.
@@ -136,7 +71,7 @@ run_in_new_folder() {
   local outcome='passed'
 
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  marker="$(mktemp "${RUN_LOG_DIR}/run-${stamp}.XXXXXX")"
+  marker="$(mktemp "${FOLDER_PARENT}/run-${stamp}.XXXXXX")"
   CLEANUP_PATHS+=("${marker}")
   folder="${marker}.d"
   mkdir -- "${folder}"
@@ -154,9 +89,7 @@ run_in_new_folder() {
 # Script entry point.
 main() {
   local merge='no'
-
-  require_commands bash cat date mkdir mktemp rm
-  start_run_log
+  start_run_log "$@"
 
   while (( $# > 0 )); do
     case "${1}" in
@@ -182,10 +115,13 @@ main() {
   done
 
   (( $# > 0 )) || die 2 'no command to run: pass it after -- (try --help)'
+  require_commands bash cat date mkdir mktemp
   run_in_new_folder "${merge}" "$@" || die 1 'the command failed (its logs are in the run folder)'
 }
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 trap cleanup EXIT
+
+trap_signals
 
 main "$@"
