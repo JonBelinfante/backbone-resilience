@@ -1,5 +1,5 @@
-DRIFTED list_shell_scripts x2 bodies=2 scripts/lint.sh scripts/refactor-report.sh
-SIMILAR 63% write_tracking@scripts/refactor-report.sh apply_mode@scripts/sync-mode.sh
-SIZE NEAR  383 scripts/refactor-report.sh
+DRIFTED list_shell_scripts x2 bodies=2 scripts/lint-scripts.sh scripts/report-refactoring.sh
+SIMILAR 63% write_tracking@scripts/report-refactoring.sh apply_mode@scripts/set-replication-mode.sh
+SIZE NEAR  383 scripts/report-refactoring.sh
 SIZE NEAR  360 scripts/test-failover-roundtrip.sh
-SIZE NEAR  318 scripts/verify.sh
+SIZE NEAR  318 scripts/verify-replication.sh

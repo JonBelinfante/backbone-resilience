@@ -209,7 +209,7 @@ clone_primary() {
 
 # Turn the clone into a standby. standby.signal means: start in recovery and stream from
 # primary_conninfo. application_name is what the primary reports in pg_stat_replication and
-# what synchronous_standby_names matches (see scripts/sync-mode.sh).
+# what synchronous_standby_names matches (see scripts/set-replication-mode.sh).
 mark_as_standby() {
   local conninfo="host=${PRIMARY_HOST} port=${PRIMARY_PORT} user=${REPLICATION_USER}"
 

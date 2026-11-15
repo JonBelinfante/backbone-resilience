@@ -1,4 +1,4 @@
-# Helper for refactor-report.sh. It is not run directly.
+# Helper for report-refactoring.sh. It is not run directly.
 # Select what to do with -v mode=NAME:
 #   functions   FILE...  one record per function: name, location, body (statements joined by ;)
 #   show        FILE...  every definition of the function named by -v target=NAME, and how copies differ
@@ -7,7 +7,7 @@
 #   identical | samename | similar   read the function records on standard input and group them
 # Records use the separator character 034 (octal) between fields.
 
-# The last two path components, for example scripts/verify.sh.
+# The last two path components, for example scripts/verify-replication.sh.
 function short_name(path) {
   if (match(path, /[^\/]+\/[^\/]+$/)) {
     return substr(path, RSTART)

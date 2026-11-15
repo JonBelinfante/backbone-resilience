@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # script-kind: executable
 # Purpose: Prove that the standby is streaming WAL from the primary and replaying it.
-# Usage: verify.sh [-h | --help]
+# Usage: verify-replication.sh [-h | --help]
 # Requires: cat date head mktemp rm sleep
 # Exit codes: 0 all checks passed, 1 a check failed, 2 usage or configuration error
 set -Eeuo pipefail
@@ -82,24 +82,23 @@ require_commands() {
 # Print how to run this script.
 usage() {
   cat <<'USAGE'
-Usage: verify.sh [-h | --help]
+Usage: verify-replication.sh [-h | --help]
 
-Prove that the standby is streaming WAL from the primary and replaying it. Both
-containers must be running. The checks stop at the first one that fails:
+Proves, with a live write, that the standby is streaming WAL from the primary and replaying
+it. Both containers must be running. The checks run in order and stop at the first failure:
 
-  1. Roles:       the primary is not in recovery, the standby is.
-  2. Streaming:   the primary sees at least one standby in the 'streaming' state.
-  3. Round trip:  insert a row on the primary and time how long until the
-                  standby can read it.
-  4. Read-only:   a write attempted on the standby must be rejected.
-  5. WAL:         show received and replayed positions on the standby (equal
-                  means fully caught up).
+  1. Roles       the primary accepts writes and the standby is in recovery.
+  2. Streaming   the primary lists a standby in the 'streaming' state.
+  3. Round trip  insert a row on the primary, poll the standby for up to about 10 s and report
+                 how long the row took to appear; it fails if the row never arrives.
+  4. Read-only   a write sent to the standby must be rejected.
+  5. WAL         received and replayed positions on the standby (equal = fully caught up).
+
+Side effect: creates the table replication_check if missing and adds one row per run (kept).
 
 Environment:
-  PRIMARY_CONTAINER  name of the primary container (default: pg-primary)
-  STANDBY_CONTAINER  name of the standby container (default: pg-standby)
-  RUN_LOG_DIR        directory for this run's log file, which must exist
-                     (default: temporary directory)
+  PRIMARY_CONTAINER, STANDBY_CONTAINER  container names (defaults: pg-primary, pg-standby)
+  RUN_LOG_DIR  directory for this run's log file, which must exist (default: temporary directory)
 
 Exit codes: 0 all checks passed, 1 a check failed, 2 usage or configuration error
 USAGE

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # script-kind: executable
 # Purpose: Run the lint check and the failover round trip, printing one line per result.
-# Usage: check-all.sh [-h | --help] [--skip-roundtrip]
+# Usage: run-all-checks.sh [-h | --help] [--skip-roundtrip]
 # Requires: cat date mktemp rm tail
 # Exit codes: 0 every check passed, 1 a check failed, 2 usage or configuration error
 
@@ -67,13 +67,13 @@ on_error() {
 # Print how to run this script.
 usage() {
   cat <<'USAGE'
-Usage: check-all.sh [-h | --help] [--skip-roundtrip]
+Usage: run-all-checks.sh [-h | --help] [--skip-roundtrip]
 
 Runs the checks and prints one line per result: PASS or FAIL, then the check's name.
 A failed check also prints the last lines of its output. Each check's full output
 goes to a temporary file that is removed afterwards.
 
-  lint       lint.sh: bash syntax, shellcheck and the Bash standard (needs BASHCHECK_WRAPPER)
+  lint       lint-scripts.sh: bash syntax, shellcheck and the Bash standard (needs BASHCHECK_WRAPPER)
   roundtrip  test-failover-roundtrip.sh: the 17-step failover test (needs the stack up)
 
 Options:
@@ -137,7 +137,7 @@ run_checks() {
   local run_roundtrip="${1:?run_roundtrip required}"
   local failures=0
 
-  if ! run_check lint bash "${SCRIPT_DIR}lint.sh"; then
+  if ! run_check lint bash "${SCRIPT_DIR}lint-scripts.sh"; then
     failures=$(( failures + 1 ))
   fi
   if [[ "${run_roundtrip}" == 'yes' ]]; then

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # script-kind: executable
-# Purpose: Print the container name of a database, or whether a container is running.
-# Usage: container-info.sh [-h | --help] (--database primary|standby | --container NAME)
+# Purpose: Run SQL in a database container with psql, or answer whether it is in recovery.
+# Usage: run-database-sql.sh [-h | --help] --container NAME [--bare] [--ask recovery]
 # Requires: cat date mktemp rm
-# Exit codes: 0 answer printed, 1 failure (for example no such container), 2 usage error
+# Exit codes: 0 success, 1 failure (psql or docker failed), 2 usage or configuration error
 
 set -Eeuo pipefail
 
@@ -14,10 +14,7 @@ fi
 
 shopt -s inherit_errexit
 
-# Environment: PRIMARY_CONTAINER and STANDBY_CONTAINER name the two containers as compose
-# created them. RUN_LOG_DIR defaults to the temporary directory and must exist.
-readonly PRIMARY_CONTAINER="${PRIMARY_CONTAINER:-pg-primary}"
-readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
+# Environment: RUN_LOG_DIR defaults to the temporary directory and must exist.
 readonly RUN_LOG_DIR="${RUN_LOG_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
@@ -25,8 +22,8 @@ readonly SCRIPT_NAME="${0##*/}"
 # started by its bare name), so paths to sibling files work however the script is started.
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 
-# shellcheck source=../lib/container.sh
-source "${SCRIPT_DIR}../lib/container.sh"
+# shellcheck source=../lib/database.sh
+source "${SCRIPT_DIR}../lib/database.sh"
 
 declare RUN_LOG=''
 declare -a CLEANUP_PATHS=()
@@ -72,19 +69,26 @@ on_error() {
 # Print how to run this script.
 usage() {
   cat <<'USAGE'
-Usage: container-info.sh [-h | --help] (--database primary|standby | --container NAME)
+Usage: run-database-sql.sh [-h | --help] --container NAME [--bare] [--ask recovery]
+         [-- PSQL_ARGUMENT ...]
 
-Small reusable answer for the other scripts: call it and read its output.
+Command-line wrapper over lib/database.sh. Runs the SQL given on standard input with psql
+inside a database container, as the postgres user on appdb, and stops at the first SQL
+error. Other scripts import database.sh instead of calling this one; it is here for use
+by hand.
 
-  --database primary|standby  print the container name for that database
-  --container NAME            print true if the container is running, false if not
+  --container NAME  the database container to run psql in
+  --bare            bare output for scripts: unaligned, no headers, no decoration
+  --ask recovery    print t if the server is in recovery (a standby), f if it accepts writes
+  -- ARGUMENT ...   any further psql arguments, passed unchanged
 
-Exits 1 when the container does not exist.
+Examples:
+  run-database-sql.sh --container pg-primary --bare <<< 'select 1'
+  run-database-sql.sh --container pg-standby --ask recovery
 
-Environment: PRIMARY_CONTAINER (pg-primary), STANDBY_CONTAINER (pg-standby) and
-RUN_LOG_DIR (the run log directory, default: temporary directory).
+Environment: RUN_LOG_DIR is the run log directory (default: temporary directory).
 
-Exit codes: 0 answer printed, 1 failure (for example no such container), 2 usage error
+Exit codes: 0 success, 1 failure (psql or docker failed), 2 usage or configuration error
 USAGE
 }
 
@@ -116,43 +120,47 @@ cleanup() {
   fi
 }
 
-# Answer the one question that was asked; exactly one of database and container is given.
-answer_question() {
-  log INFO 'answering the question'
-  local database="${1-}"
-  local container="${2-}"
+# Run psql in the container with the arguments given, or answer a named question.
+run_sql() {
+  log INFO 'running SQL'
+  local container="${1-}"
+  local ask="${2-}"
+  local -a psql_args=("${@:3}")
 
-  if [[ -n "${database}" && -z "${container}" ]]; then
-    container::name_of "${database}" "${PRIMARY_CONTAINER}" "${STANDBY_CONTAINER}"
-  elif [[ -z "${database}" && -n "${container}" ]]; then
-    container::is_running "${container}"
+  [[ -n "${container}" ]] || die 2 '--container is required (try --help)'
+  if [[ -n "${ask}" ]]; then
+    [[ "${ask}" == 'recovery' ]] || die 2 "unknown question: ${ask} (use recovery)"
+    database::in_recovery "${container}"
   else
-    die 2 'give exactly one of --database or --container (try --help)'
+    database::run "${container}" "${psql_args[@]}"
   fi
 }
 
 # Script entry point.
 main() {
-  local database=''
   local container=''
-
+  local ask=''
+  local -a psql_args=()
   require_commands cat date mktemp rm
   start_run_log
-
   while (( $# > 0 )); do
     case "${1}" in
       -h | --help)
         usage
         return 0
         ;;
-      --database)
-        (( $# >= 2 )) || die 2 '--database needs a value'
-        database="${2}"
-        shift 2
-        ;;
       --container)
         (( $# >= 2 )) || die 2 '--container needs a value'
         container="${2}"
+        shift 2
+        ;;
+      --bare)
+        psql_args+=(-Atq)
+        shift
+        ;;
+      --ask)
+        (( $# >= 2 )) || die 2 '--ask needs a value'
+        ask="${2}"
         shift 2
         ;;
       --)
@@ -167,9 +175,7 @@ main() {
         ;;
     esac
   done
-
-  (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
-  answer_question "${database}" "${container}"
+  run_sql "${container}" "${ask}" "${psql_args[@]}" "$@"
 }
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR

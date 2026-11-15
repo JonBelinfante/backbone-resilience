@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # script-kind: executable
 # Purpose: Switch the primary between asynchronous and synchronous replication.
-# Usage: sync-mode.sh [-h | --help] [--mode async|sync|status]
+# Usage: set-replication-mode.sh [-h | --help] [--mode async|sync|status]
 # Requires: cat date mktemp rm sleep
 # Exit codes: 0 success, 1 failure, 2 usage or configuration error
 set -Eeuo pipefail
@@ -72,7 +72,7 @@ on_error() {
 # Print how to run this script.
 usage() {
   cat <<'USAGE'
-Usage: sync-mode.sh [-h | --help] [--mode async|sync|status]
+Usage: set-replication-mode.sh [-h | --help] [--mode async|sync|status]
 
 Switch the primary between asynchronous and synchronous replication. No restart
 is needed. Whatever the mode, finish by printing the current setting and the

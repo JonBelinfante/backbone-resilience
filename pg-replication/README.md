@@ -15,7 +15,7 @@ client -> pg-primary --WAL stream--> pg-standby (read-only)
   in `/bin/bash`, so install a newer one with `brew install bash` and make sure it comes first on your `PATH`
   (`bash --version` should show 5.0+).
 - Every host script accepts `-h` / `--help` (usage, options, environment, exit codes).
-- Check scripts against the Bash standard with `bash scripts/lint.sh`. It needs `shellcheck`, and
+- Check scripts against the Bash standard with `bash scripts/lint-scripts.sh`. It needs `shellcheck`, and
   the bash-standard plugin. `BASHCHECK_WRAPPER` is required and must be the plugin's `bin` directory (it holds
   `check.py`, which verifies the checker's SHA-256 before running it). Set it once, for example in `~/.zshrc`:
   `export BASHCHECK_WRAPPER="$HOME/.claude/local-marketplaces/bashcheck/bash-standard/bin"`.
@@ -26,7 +26,7 @@ client -> pg-primary --WAL stream--> pg-standby (read-only)
 cd pg-replication
 docker compose up -d
 docker compose ps            # wait for both to be healthy
-./scripts/verify.sh          # write on primary, read on standby, confirm standby is read-only
+./scripts/verify-replication.sh          # write on primary, read on standby, confirm standby is read-only
 ```
 
 The scripts can be started from any folder (`bash x.sh`, `./x.sh` or a full path); they find their siblings from their own path.
@@ -37,12 +37,12 @@ If the scripts are not executable: `chmod +x scripts/*.sh primary/*.sh standby/*
 
 | Experiment | Command | What to observe |
 |---|---|---|
-| Sync vs async | `./scripts/sync-mode.sh --mode sync` / `--mode async` / `--mode status` | `sync_state` becomes `sync`; RPO becomes 0 |
+| Sync vs async | `./scripts/set-replication-mode.sh --mode sync` / `--mode async` / `--mode status` | `sync_state` becomes `sync`; RPO becomes 0 |
 | Standby outage, async | `docker stop pg-standby`, write to primary | Writes keep working; the slot retains WAL |
-| Standby outage, sync | `./scripts/sync-mode.sh --mode sync`, `docker stop pg-standby`, then insert on primary | The insert **hangs** until the standby returns. This is the availability cost of RPO 0 |
+| Standby outage, sync | `./scripts/set-replication-mode.sh --mode sync`, `docker stop pg-standby`, then insert on primary | The insert **hangs** until the standby returns. This is the availability cost of RPO 0 |
 | Catch-up | `docker start pg-standby` | Standby resumes from its position in the WAL, then converges |
 | Failover | `docker stop pg-primary`, then `./scripts/promote-standby-to-primary.sh` | Standby becomes writable; timeline increments |
-| Full failover and fail-back | `./scripts/check-all.sh` (or `./scripts/test-failover-roundtrip.sh` alone) | 17 steps: fail over, rejoin the old primary with `pg_rewind`, write while it is down, compare both databases; then the starting state is restored |
+| Full failover and fail-back | `./scripts/run-all-checks.sh` (or `./scripts/test-failover-roundtrip.sh` alone) | 17 steps: fail over, rejoin the old primary with `pg_rewind`, write while it is down, compare both databases; then the starting state is restored |
 
 Connect directly: `psql -h localhost -p 5433 -U postgres appdb` (password `postgres`).
 These are throwaway credentials for a local experiment only, so the ports are published on `127.0.0.1` only (see
@@ -56,8 +56,8 @@ superuser password would otherwise be open to the whole network.
 |---|---|
 | `bring-down-database.sh --database primary\|standby` | Stops that container cleanly and confirms it is down |
 | `bring-up-database.sh --database primary\|standby` | Starts it, waits until healthy, and stops it again if two nodes would both be writable (split-brain guard) |
-| `container-info.sh --database primary\|standby` / `--container NAME` | Command-line wrapper over `lib/container.sh`: prints the container name for a database, or `true`/`false` for whether a container is running (fails if it does not exist). Other scripts import the library instead of calling this |
-| `database-sql.sh --container NAME [--bare] [--ask recovery]` | Command-line wrapper over `lib/database.sh`: runs the SQL on standard input with psql in that container (`--bare` for scriptable output), or `--ask recovery` prints `t` (standby) or `f` (accepts writes) |
+| `show-container-info.sh --database primary\|standby` / `--container NAME` | Command-line wrapper over `lib/container.sh`: prints the container name for a database, or `true`/`false` for whether a container is running (fails if it does not exist). Other scripts import the library instead of calling this |
+| `run-database-sql.sh --container NAME [--bare] [--ask recovery]` | Command-line wrapper over `lib/database.sh`: runs the SQL on standard input with psql in that container (`--bare` for scriptable output), or `--ask recovery` prints `t` (standby) or `f` (accepts writes) |
 | `../lib/container.sh`, `../lib/database.sh` (libraries) | **Every docker and database call, reusable from any script.** `container::` has `name_of`, `is_running`, `inspect`, `image`, `network`, `volume`, `setting`, `health`, `start`, `stop`, `wait_healthy`, `compose_up`, `logs`, `rewind` (pg_rewind in a throwaway container) and `mark_standby`. `database::` has `run`, `bare`, `in_recovery`, `is_ready` and `drop_all_sql`. Imported with `source "${SCRIPT_DIR}../lib/NAME.sh"` (plus a `# shellcheck source=` hint); they run in the caller's process, so there is no extra process or run log per call, and they need the importing script's `log` and `die`. Libraries cannot call each other, so `database.sh` makes no docker-volume calls |
 | `../lib/story.sh` (a library, sourced not run) | The test's story-and-check layer as `story::` functions: `narrate` (ms timestamp, script name, message, also logged), `narrate_stream`, `narrate_query`, `run_logged`, `expect_equal`. Imported with `source "${SCRIPT_DIR}../lib/story.sh"`; needs the importing script's `log` and `die` |
 | `run-with-log-folder.sh [--merge] -- COMMAND ...` | Runs COMMAND with one shared run folder (`run-<time>.<random>.d` inside `RUN_LOG_DIR`), so every script it starts, however deeply, logs there instead of scattering files. Prints the folder; `--merge` also prints the merged timeline |
@@ -66,8 +66,8 @@ superuser password would otherwise be open to the whole network.
 | `promote-primary-to-standby.sh` | Rebuilds the stopped old primary as a standby of the new writer: slot, checkpoint, `pg_rewind`, standby settings, start, wait until streaming |
 | `test-failover-roundtrip.sh` | 17-step test that tells its story (every line has a UTC time and the script name, with each SQL statement, the data it returned and each script's output): drop tables, replicate a row, fail over, write on the promoted standby, rejoin the old primary, write while the replica is down, compare both databases |
 | `restore-starting-state.sh` | Reads the current roles and returns to the starting state (`pg-primary` writes, `pg-standby` replicates): starts a stopped node, or fails back with `pg_rewind` after a failover. Run it after any experiment |
-| `check-all.sh [--skip-roundtrip]` | One line per check: `PASS lint`, `PASS roundtrip`. A failure also prints the last 15 lines of that check's output |
-| `refactor-report.sh [--mode MODE] [--show NAME]` | Read-only refactoring aid. Modes: `duplicates`, `usage` (reuse map), `size`, `all`, `brief` (one tagged line per finding), `baseline` (save `refactor-baseline.txt`), `changes` (diff against it). `--show NAME` prints every copy of a function and how they differ. Uses `refactor-report.awk` |
+| `run-all-checks.sh [--skip-roundtrip]` | One line per check: `PASS lint`, `PASS roundtrip`. A failure also prints the last 15 lines of that check's output |
+| `report-refactoring.sh [--mode MODE] [--show NAME]` | Read-only refactoring aid. Modes: `duplicates`, `usage` (reuse map), `size`, `all`, `brief` (one tagged line per finding), `baseline` (save `refactor-baseline.txt`), `changes` (diff against it). `--show NAME` prints every copy of a function and how they differ. Uses `report-refactoring.awk` |
 
 Notes:
 
@@ -98,6 +98,11 @@ One test run writes 16 run logs (it was 87 when the SQL and container helpers we
 Run `./scripts/collect-logs.sh` **before** `docker compose down`, because removing containers deletes their logs.
 Decisions (refusing or performing a promotion, changing sync mode) are logged as `DECISION:` / `CHANGE:` lines in the run log.
 Logs live inside this OneDrive folder; they are small text files, but set `LOG_DIR=/some/other/path` to keep them out of sync.
+
+## What is proven
+
+See `capability-register.md`: each capability with its evidence, status (automated, manual, partial) and limits, plus
+the gaps (observed RPO and RTO, fencing, crash failures, a true `pg_rewind` divergence, load, network faults).
 
 ## Design notes
 

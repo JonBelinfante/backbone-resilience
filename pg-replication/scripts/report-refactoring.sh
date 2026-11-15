@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # script-kind: executable
 # Purpose: Report duplicated functions, script reuse and script sizes, to guide refactoring.
-# Usage: refactor-report.sh [-h | --help] [--mode MODE] [--show NAME]
+# Usage: report-refactoring.sh [-h | --help] [--mode MODE] [--show NAME]
 # Requires: awk cat date diff find mktemp rm sed sort
 # Exit codes: 0 report written, 1 failure, 2 usage or configuration error
 
@@ -25,7 +25,7 @@ readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 readonly ROOT_DIR="${SCRIPT_DIR}.."
 readonly BASELINE_PATH="${ROOT_DIR}/refactor-baseline.txt"
 readonly NAME_PATTERN='^[a-z_0-9]+$'
-readonly AWK_PROGRAM="${SCRIPT_DIR}refactor-report.awk"
+readonly AWK_PROGRAM="${SCRIPT_DIR}report-refactoring.awk"
 readonly TEMPLATE_FUNCTIONS='log die on_error usage start_run_log cleanup main require_commands'
 readonly MANDATED_FUNCTIONS="${TEMPLATE_FUNCTIONS} check_environment"
 readonly LINE_LIMIT=400
@@ -76,20 +76,21 @@ on_error() {
 # Print how to run this script.
 usage() {
   cat <<'USAGE'
-Usage: refactor-report.sh [-h | --help] [--mode MODE] [--show NAME]
+Usage: report-refactoring.sh [-h | --help] [--mode MODE] [--show NAME]
 
-Read-only report over the shell scripts, to guide refactoring. Changes no script.
+Read-only report that finds duplicated code, reuse and oversized files across the shell
+scripts, to decide what to refactor. It never changes a script.
 
 Modes (default all):
-  duplicates  identical, drifted and similar function bodies (the standard's own functions,
-              such as log, die, usage and check_environment, are left out)
-  usage       purpose, usage line and mentioned scripts of each script (reuse map)
-  size        line count per script against the 400-line limit
+  duplicates  function bodies that are identical, drifted apart or similar (standard ones skipped)
+  usage       each script's purpose and usage line, and which other scripts it mentions
+  size        lines per script against the 400-line limit (NEAR above 300, OVER above 400)
   all         the three reports above
-  brief       one tagged line per finding (duplicates, flagged sizes), no headings
-  baseline    save the brief report, without line numbers, as the baseline file
-  changes     show what differs from the baseline (< fixed, > new)
---show NAME   print every definition of function NAME and how the copies differ
+  brief       one tagged line per finding: IDENTICAL, DRIFTED, SIMILAR or SIZE
+  baseline    save the brief report (no line numbers) to refactor-baseline.txt
+  changes     compare with that baseline: "<" fixed since then, ">" new
+  --show NAME print every copy of function NAME and how the copies differ
+Workflow: brief, then --show NAME, refactor, then changes. Functions named a::b are not seen.
 
 Environment: RUN_LOG_DIR is the run log directory (default: temporary directory).
 

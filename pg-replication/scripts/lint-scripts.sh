@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # script-kind: executable
 # Purpose: Check every shell script in the repository against the Bash standard.
-# Usage: lint.sh [-h | --help]
+# Usage: lint-scripts.sh [-h | --help]
 # Requires: bash cat date find mktemp python3 rm shellcheck sort
 # Exit codes: 0 all clean, 1 problems found, 2 usage or configuration error, 3 required tool missing
 set -Eeuo pipefail
@@ -66,7 +66,7 @@ on_error() {
 # Print how to run this script.
 usage() {
   cat <<'USAGE'
-Usage: lint.sh [-h | --help]
+Usage: lint-scripts.sh [-h | --help]
 
 Check every shell script in the repository (every *.sh file outside .git and
 logs) with three checks, and report each as PASS or FAIL:
