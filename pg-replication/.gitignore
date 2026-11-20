@@ -1,0 +1,5 @@
+secrets/*
+!secrets/README.txt
+
+# Local settings for docker-compose (port numbers and user names, no passwords; see secrets/).
+.env
