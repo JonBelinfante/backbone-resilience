@@ -116,7 +116,7 @@ write_standby_settings() {
   local password
   local conninfo="host=${STANDBY_CONTAINER} port=${DATABASE_PORT} user=${REPLICATION_USER}"
 
-  password="$(container::setting "${STANDBY_CONTAINER}" REPLICATION_PASSWORD)"
+  password="$(container::secret "${STANDBY_CONTAINER}" pg-replication-password)"
   conninfo+=" password=${password} application_name=${STANDBY_NAME}"
   container::mark_standby \
     "${PRIMARY_CONTAINER}" \

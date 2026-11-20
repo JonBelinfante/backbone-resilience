@@ -1,19 +1,10 @@
+# compose-kind: complete
 name: pg-replication
-
-x-pg-env: &pg-env
-  POSTGRES_USER: postgres
-  POSTGRES_PASSWORD: postgres
-  POSTGRES_DB: appdb
-  REPLICATION_USER: replicator
-  REPLICATION_PASSWORD: replicator_pw
-  STANDBY_NAME: standby1          # also the application_name used for synchronous replication
-  STANDBY_SLOT: standby1_slot     # physical replication slot the primary keeps for the standby
 
 services:
   pg-primary:
     image: postgres:16
     container_name: pg-primary
-    environment: *pg-env
     command:
       - postgres
       - -c
@@ -33,10 +24,22 @@ services:
       - -c
       - hot_standby_feedback=on
     ports:
-      - "127.0.0.1:5433:5432"
+      - "127.0.0.1:${PG_PRIMARY_PORT}:${PG_CONTAINER_PORT}"
+    networks: [pgnet]
     volumes:
       - primary-data:/var/lib/postgresql/data
       - ./primary/init-replication.sh:/docker-entrypoint-initdb.d/10-init-replication.sh:ro
+    secrets:
+      - pg-password
+      - pg-replication-password
+    environment:
+      POSTGRES_USER: ${PG_USER:?set PG_USER in .env}
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg-password
+      POSTGRES_DB: appdb
+      REPLICATION_USER: ${PG_REPLICATION_USER:?set PG_REPLICATION_USER in .env}
+      REPLICATION_PASSWORD_FILE: /run/secrets/pg-replication-password
+      STANDBY_NAME: ${PG_STANDBY_NAME:?set PG_STANDBY_NAME in .env}  # also the application_name used for synchronous replication
+      STANDBY_SLOT: standby1_slot    # physical replication slot the primary keeps for the standby
     healthcheck:
       # -h 127.0.0.1 forces TCP: the temporary init-time server only listens on the unix socket,
       # so this only goes healthy once the real server (and the init script) has finished.
@@ -44,16 +47,10 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
-    networks: [pgnet]
 
   pg-standby:
     image: postgres:16
     container_name: pg-standby
-    environment:
-      <<: *pg-env
-      PRIMARY_HOST: pg-primary
-    # The trailing "--" ends the script's own options; `command` below is then passed through to postgres.
-    entrypoint: ["bash", "/standby/entrypoint.sh", "--"]
     # Same WAL/slot settings as the primary, so a promoted standby behaves like a primary
     # (can feed a rebuilt old primary, supports pg_rewind).
     command:
@@ -74,20 +71,34 @@ services:
       - max_slot_wal_keep_size=1GB
       - -c
       - wal_log_hints=on
+    # The trailing "--" ends the script's own options; `command` above is then passed through to postgres.
+    entrypoint: ["bash", "/standby/entrypoint.sh", "--"]
     ports:
-      - "127.0.0.1:5434:5432"
+      - "127.0.0.1:${PG_STANDBY_PORT}:${PG_CONTAINER_PORT}"
+    networks: [pgnet]
     volumes:
       - standby-data:/var/lib/postgresql/data
       - ./standby/entrypoint.sh:/standby/entrypoint.sh:ro
-    depends_on:
-      pg-primary:
-        condition: service_healthy
+    secrets:
+      - pg-password
+      - pg-replication-password
+    environment:
+      POSTGRES_USER: ${PG_USER:?set PG_USER in .env}
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg-password
+      POSTGRES_DB: appdb
+      REPLICATION_USER: ${PG_REPLICATION_USER:?set PG_REPLICATION_USER in .env}
+      REPLICATION_PASSWORD_FILE: /run/secrets/pg-replication-password
+      STANDBY_NAME: ${PG_STANDBY_NAME:?set PG_STANDBY_NAME in .env}
+      STANDBY_SLOT: standby1_slot
+      PRIMARY_HOST: pg-primary
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d appdb"]
       interval: 2s
       timeout: 3s
       retries: 30
-    networks: [pgnet]
+    depends_on:
+      pg-primary:
+        condition: service_healthy
 
 networks:
   pgnet:
@@ -96,3 +107,11 @@ networks:
 volumes:
   primary-data:
   standby-data:
+
+# Passwords are files, mounted read-only under /run/secrets/ (see secrets/README.txt); they are never in this file,
+# in .env or in the containers' environment.
+secrets:
+  pg-password:
+    file: ./secrets/pg-password.txt
+  pg-replication-password:
+    file: ./secrets/pg-replication-password.txt

@@ -69,6 +69,14 @@ container::volume() {
   container::inspect "${container}" "${template}"
 }
 
+# Print a Docker secret mounted in a running container (the contents of /run/secrets/NAME).
+container::secret() {
+  local container="${1:?container required}"
+  local name="${2:?name required}"
+
+  docker exec "${container}" cat -- "/run/secrets/${name}"
+}
+
 # Print the value of an environment variable set inside a running container.
 container::setting() {
   local container="${1:?container required}"
@@ -160,7 +168,7 @@ container::rewind() {
   image="$(container::image "${target}")"
   network="$(container::network "${target}")"
   volume="$(container::volume "${target}")"
-  password="$(container::setting "${source}" POSTGRES_PASSWORD)"
+  password="$(container::secret "${source}" pg-password)"
   data_dir="$(container::setting "${source}" PGDATA)"
   log INFO "CHANGE: pg_rewind of volume ${volume} against ${source}"
   PGPASSWORD="${password}" docker run \

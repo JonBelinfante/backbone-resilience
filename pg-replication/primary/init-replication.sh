@@ -19,7 +19,7 @@ readonly PGDATA="${PGDATA:-}"
 readonly POSTGRES_USER="${POSTGRES_USER:-}"
 readonly POSTGRES_DB="${POSTGRES_DB:-}"
 readonly REPLICATION_USER="${REPLICATION_USER:-}"
-readonly REPLICATION_PASSWORD="${REPLICATION_PASSWORD:-}"
+readonly REPLICATION_PASSWORD_FILE="${REPLICATION_PASSWORD_FILE:-}"
 readonly STANDBY_SLOT="${STANDBY_SLOT:-}"
 readonly RUN_LOG_DIR="${RUN_LOG_DIR:-${TMPDIR:-/tmp}}"
 
@@ -80,7 +80,8 @@ time the data volume is empty; it does not run again on later restarts.
   3. Allow that role to connect for replication (pg_hba.conf).
 
 Environment (all required, set in docker-compose.yml): PGDATA, POSTGRES_USER,
-POSTGRES_DB, REPLICATION_USER, REPLICATION_PASSWORD, STANDBY_SLOT.
+POSTGRES_DB, REPLICATION_USER, REPLICATION_PASSWORD_FILE (the path of the file that holds
+the replication password; a Docker secret), STANDBY_SLOT.
 RUN_LOG_DIR is the directory for the run log (default: temporary directory).
 
 Exit codes: 0 success, 1 failure, 2 usage or configuration error
@@ -101,8 +102,11 @@ check_environment() {
   if [[ -z "${REPLICATION_USER}" ]]; then
     die 2 'REPLICATION_USER must be set'
   fi
-  if [[ -z "${REPLICATION_PASSWORD}" ]]; then
-    die 2 'REPLICATION_PASSWORD must be set'
+  if [[ -z "${REPLICATION_PASSWORD_FILE}" ]]; then
+    die 2 'REPLICATION_PASSWORD_FILE must be set'
+  fi
+  if [[ ! -r "${REPLICATION_PASSWORD_FILE}" ]]; then
+    die 2 'the file named by REPLICATION_PASSWORD_FILE is not readable'
   fi
   if [[ -z "${STANDBY_SLOT}" ]]; then
     die 2 'STANDBY_SLOT must be set'
@@ -167,6 +171,7 @@ cleanup() {
 
 # SQL: create the replication role and the slot. The values are read from the environment by
 # psql (\getenv) and quoted by psql, so the shell never puts a password into the SQL text.
+# The password is in the environment of the psql process only, read from its secret file.
 # A physical slot makes the primary retain WAL until the standby has received it (bounded by
 # max_slot_wal_keep_size).
 sql_role_and_slot() {
@@ -182,8 +187,11 @@ SQL
 # Steps 1 and 2: run the SQL against the freshly created database. ON_ERROR_STOP makes psql
 # exit non-zero on the first error, so initialisation stops.
 create_role_and_slot() {
+  local password
+
+  password="$(< "${REPLICATION_PASSWORD_FILE}")"
   log INFO "creating role ${REPLICATION_USER} and slot ${STANDBY_SLOT}"
-  psql -v ON_ERROR_STOP=1 \
+  REPLICATION_PASSWORD="${password}" psql -v ON_ERROR_STOP=1 \
     --username "${POSTGRES_USER}" \
     --dbname "${POSTGRES_DB}" \
     <<< "$(sql_role_and_slot)"

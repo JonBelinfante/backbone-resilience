@@ -13,14 +13,15 @@ fi
 
 shopt -s inherit_errexit
 
-# Environment: PGDATA, PRIMARY_HOST, REPLICATION_USER, REPLICATION_PASSWORD and POSTGRES_USER
-# are required (checked in check_environment). PRIMARY_PORT defaults to 5432, STANDBY_NAME to
-# standby1, and STANDBY_SLOT to standby1_slot. RUN_LOG_DIR defaults to the temporary directory.
+# Environment: PGDATA, PRIMARY_HOST, REPLICATION_USER, REPLICATION_PASSWORD_FILE (the path of the
+# file that holds the replication password) and POSTGRES_USER are required (checked in
+# check_environment). PRIMARY_PORT defaults to 5432, STANDBY_NAME to standby1, and STANDBY_SLOT
+# to standby1_slot. RUN_LOG_DIR defaults to the temporary directory.
 readonly PGDATA="${PGDATA:-}"
 readonly PRIMARY_HOST="${PRIMARY_HOST:-}"
 readonly PRIMARY_PORT="${PRIMARY_PORT:-5432}"
 readonly REPLICATION_USER="${REPLICATION_USER:-}"
-readonly REPLICATION_PASSWORD="${REPLICATION_PASSWORD:-}"
+readonly REPLICATION_PASSWORD_FILE="${REPLICATION_PASSWORD_FILE:-}"
 readonly POSTGRES_USER="${POSTGRES_USER:-}"
 readonly STANDBY_NAME="${STANDBY_NAME:-standby1}"
 readonly STANDBY_SLOT="${STANDBY_SLOT:-standby1_slot}"
@@ -106,8 +107,8 @@ directory is reused and streaming resumes where it left off.
 
 The command must follow `--` (docker-compose.yml: entrypoint ends with "--").
 
-Environment: PGDATA, PRIMARY_HOST, REPLICATION_USER, REPLICATION_PASSWORD and
-POSTGRES_USER are required. PRIMARY_PORT (5432), STANDBY_NAME (standby1) and
+Environment: PGDATA, PRIMARY_HOST, REPLICATION_USER, REPLICATION_PASSWORD_FILE (the path
+of the file that holds the replication password, a Docker secret) and POSTGRES_USER are required. PRIMARY_PORT (5432), STANDBY_NAME (standby1) and
 STANDBY_SLOT (standby1_slot) have defaults. RUN_LOG_DIR is the run log directory.
 
 Exit codes: 0 success, 1 failure, 2 usage or configuration error
@@ -125,8 +126,11 @@ check_environment() {
   if [[ -z "${REPLICATION_USER}" ]]; then
     die 2 'REPLICATION_USER must be set'
   fi
-  if [[ -z "${REPLICATION_PASSWORD}" ]]; then
-    die 2 'REPLICATION_PASSWORD must be set'
+  if [[ -z "${REPLICATION_PASSWORD_FILE}" ]]; then
+    die 2 'REPLICATION_PASSWORD_FILE must be set'
+  fi
+  if [[ ! -r "${REPLICATION_PASSWORD_FILE}" ]]; then
+    die 2 'the file named by REPLICATION_PASSWORD_FILE is not readable'
   fi
   if [[ -z "${POSTGRES_USER}" ]]; then
     die 2 'POSTGRES_USER must be set'
@@ -218,7 +222,10 @@ wait_for_primary() {
 # slot created by init-replication.sh so no WAL is lost between backup and streaming, and
 # --checkpoint=fast avoids waiting for the primary's next scheduled checkpoint.
 run_basebackup() {
-  PGPASSWORD="${REPLICATION_PASSWORD}" gosu postgres pg_basebackup \
+  local password
+
+  password="$(< "${REPLICATION_PASSWORD_FILE}")"
+  PGPASSWORD="${password}" gosu postgres pg_basebackup \
     -h "${PRIMARY_HOST}" \
     -p "${PRIMARY_PORT}" \
     -U "${REPLICATION_USER}" \
@@ -249,8 +256,10 @@ clone_primary() {
 # what synchronous_standby_names matches (see scripts/set-replication-mode.sh).
 mark_as_standby() {
   local conninfo="host=${PRIMARY_HOST} port=${PRIMARY_PORT} user=${REPLICATION_USER}"
+  local password
 
-  conninfo+=" password=${REPLICATION_PASSWORD} application_name=${STANDBY_NAME}"
+  password="$(< "${REPLICATION_PASSWORD_FILE}")"
+  conninfo+=" password=${password} application_name=${STANDBY_NAME}"
   gosu postgres touch "${PGDATA}/standby.signal"
   printf '%s\n' "primary_conninfo = '${conninfo}'" >> "${PGDATA}/postgresql.auto.conf"
   printf '%s\n' "primary_slot_name = '${STANDBY_SLOT}'" >> "${PGDATA}/postgresql.auto.conf"
