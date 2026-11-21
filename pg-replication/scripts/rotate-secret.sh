@@ -169,25 +169,6 @@ forget_identity() {
   done
 }
 
-# Point the standby's connection to the writer at the given role and password, and reload.
-# Usage: switch_standby STANDBY WRITER ROLE KEY_FILE
-switch_standby() {
-  log INFO 'switching the standby to a replication identity'
-  local standby="${1:?standby required}"
-  local writer="${2:?writer required}"
-  local role="${3:?role required}"
-  local key_file="${4:?key file required}"
-  local target="host=${writer} port=${DATABASE_PORT} user=${role} password="
-
-  log INFO "CHANGE: ${standby} now connects to ${writer} as ${role}"
-  printf '%s\n' \
-    '\getenv pw NEWPW' \
-    "\\set ci '${target}' :pw ' application_name=${STANDBY_NAME}'" \
-    "ALTER SYSTEM SET primary_conninfo = :'ci';" \
-    "${SQL_RELOAD};" |
-    access::run_sql "${standby}" "${key_file}" > /dev/null
-}
-
 # Wait until a container shows the new secret files (they are bind-mounted from the host).
 # Usage: wait_for_files NODE ROLE NEW_FILE
 wait_for_files() {
@@ -233,22 +214,23 @@ move_standby() {
   local new_role="${3:?new role required}"
   local new_file="${4:?new file required}"
   local old_role
+  local address="host=${writer} port=${DATABASE_PORT} application_name=${STANDBY_NAME}"
 
   old_role="$(< "${REPLICATION_USER_PATH}")"
   if ! access::probe_replication_login "${standby}" "${writer}" "${new_role}" "${new_file}"; then
     forget_identity "${writer}" "${new_role}"
     die 1 "the new identity ${new_role} could not log in: nothing was changed"
   fi
-  switch_standby "${standby}" "${writer}" "${new_role}" "${new_file}"
+  access::point_standby_at "${standby}" "${address}" "${new_role}" "${new_file}"
   if ! wait_for_identity "${writer}" "${new_role}"; then
-    switch_standby "${standby}" "${writer}" "${old_role}" "${REPLICATION_KEY_PATH}"
+    access::point_standby_at "${standby}" "${address}" "${old_role}" "${REPLICATION_KEY_PATH}"
     forget_identity "${writer}" "${new_role}"
     die 1 "the standby did not stream as ${new_role}: rolled back to ${old_role}"
   fi
 }
 
 # Rotate the replication password by overlap: see docs/secrets-rotation.md, method B. The reload
-# in switch_standby restarts the WAL receiver, which logs in afresh as the new role: that is the
+# in move_standby restarts the WAL receiver, which logs in afresh as the new role: that is the
 # proof the new secret works (no forced disconnect, which would stall synchronous commits).
 # Usage: rotate_replication WRITER STANDBY NEW_FILE KEEP_OLD
 rotate_replication() {

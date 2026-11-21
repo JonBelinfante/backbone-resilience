@@ -6,6 +6,8 @@
 # Exit codes: none (the functions return, or call die of the script that imported them)
 
 readonly FAULT_INTEGER_PATTERN='^[0-9]+$'
+readonly FAULT_SETTING_PATTERN='^[a-z_]+$'
+readonly FAULT_VALUE_PATTERN='^[A-Za-z0-9_.]+$'
 readonly FAULT_RESTART_ATTEMPTS=60
 readonly FAULT_RESTART_PAUSE_SECONDS=1
 readonly FAULT_CHECKPOINT_KILL_SECONDS=0.1
@@ -180,4 +182,22 @@ fault::crash_in_checkpoint() {
   sleep "${FAULT_CHECKPOINT_KILL_SECONDS}"
   fault::crash_and_restart "${container}" "${seconds}"
   wait "${pid}" || log INFO 'the checkpoint ended with the crash'
+}
+
+# Change a server setting on a node and reload, or put it back to its default when the value is
+# the word reset. The setting names come from the caller, so they must be plain lower-case words.
+# Usage: fault::tune CONTAINER SETTING VALUE
+fault::tune() {
+  local container="${1:?container required}"
+  local setting="${2:?setting required}"
+  local value="${3:?value required}"
+  local sql="alter system set ${setting} = '${value}'; ${FAULT_RELOAD_SQL}"
+
+  [[ "${setting}" =~ ${FAULT_SETTING_PATTERN} ]] || die 2 "not a setting name: ${setting}"
+  [[ "${value}" =~ ${FAULT_VALUE_PATTERN} ]] || die 2 "not a plain value: ${value}"
+  if [[ "${value}" == 'reset' ]]; then
+    sql="alter system reset ${setting}; ${FAULT_RELOAD_SQL}"
+  fi
+  log INFO "CHANGE: ${container} ${setting} ${value}"
+  database::run "${container}" <<< "${sql}" > /dev/null
 }

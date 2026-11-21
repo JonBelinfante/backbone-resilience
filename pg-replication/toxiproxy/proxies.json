@@ -1,0 +1,4 @@
+[
+  {"name": "to-primary", "listen": "0.0.0.0:15432", "upstream": "pg-primary:5432", "enabled": true},
+  {"name": "to-standby", "listen": "0.0.0.0:15433", "upstream": "pg-standby:5432", "enabled": true}
+]

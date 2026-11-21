@@ -131,3 +131,24 @@ access::create_replication_role() {
   printf '%s\n' '\getenv pw NEWPW' "${verb} ROLE ${role} WITH REPLICATION LOGIN PASSWORD :'pw';" |
     access::run_sql "${writer}" "${password_file}"
 }
+
+# Point a standby's connection to its writer at an address, a role and the password in a file, and
+# reload. The address names where to connect and who the standby calls itself, for example
+# "host=pg-primary port=5432 application_name=standby1", so it can be the writer directly or a
+# proxy in front of it. The reload restarts the WAL receiver, which logs in afresh.
+# Usage: access::point_standby_at STANDBY ADDRESS ROLE PASSWORD_FILE
+access::point_standby_at() {
+  local standby="${1:?standby required}"
+  local address="${2:?address required}"
+  local role="${3:?role required}"
+  local password_file="${4:?password file required}"
+
+  [[ "${role}" =~ ${ACCESS_ROLE_PATTERN} ]] || die 2 "not a valid role name: ${role}"
+  log INFO "CHANGE: ${standby} now connects to '${address}' as ${role}"
+  printf '%s\n' \
+    '\getenv pw NEWPW' \
+    "\\set ci '${address} user=${role} password=' :pw" \
+    "ALTER SYSTEM SET primary_conninfo = :'ci';" \
+    'SELECT pg_reload_conf();' |
+    access::run_sql "${standby}" "${password_file}" > /dev/null
+}

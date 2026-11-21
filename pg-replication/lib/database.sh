@@ -10,6 +10,7 @@ readonly DATABASE_STREAMING_SQL="select count(*) from pg_stat_replication where 
 readonly DATABASE_RETRY_ATTEMPTS=15
 readonly DATABASE_RETRY_PAUSE_SECONDS=2
 readonly DATABASE_REPLAY_ATTEMPTS=60
+readonly DATABASE_STREAM_ATTEMPTS=120
 readonly DATABASE_REPLAY_PAUSE_SECONDS=0.5
 readonly DATABASE_LSN_PATTERN='^[0-9A-F]+/[0-9A-F]+$'
 readonly DATABASE_WAL_SIZE_SQL='select (coalesce(sum(size), 0) / 1048576)::int from pg_ls_waldir()'
@@ -160,4 +161,17 @@ database::load() {
   command+=(--client "${clients}" --jobs 4 --time "${seconds}")
   command+=(--file /dev/stdin appdb)
   "${command[@]}"
+}
+
+# Wait until the writer reports exactly one streaming standby, or stop after a minute.
+# Usage: database::wait_for_streaming WRITER_CONTAINER
+database::wait_for_streaming() {
+  local container="${1:?container required}"
+  local attempt=1
+
+  while [[ "$(database::streaming_count "${container}")" != '1' ]]; do
+    (( attempt < DATABASE_STREAM_ATTEMPTS )) || die 1 "no standby is streaming from ${container}"
+    attempt=$(( attempt + 1 ))
+    sleep "${DATABASE_REPLAY_PAUSE_SECONDS}"
+  done
 }

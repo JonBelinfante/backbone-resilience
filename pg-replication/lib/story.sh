@@ -104,3 +104,18 @@ story::drop_all_tables() {
     story::run_statement "${container}" "${drops}"
   fi
 }
+
+# Pass if a whole number is between two limits (inclusive), otherwise narrate the failure and stop.
+# Usage: story::expect_between LABEL VALUE LOW HIGH
+story::expect_between() {
+  local label="${1:?label required}"
+  local value="${2:?value required}"
+  local low="${3:?low limit required}"
+  local high="${4:?high limit required}"
+
+  if (( value < low || value > high )); then
+    story::narrate "FAIL: ${label}: ${value} is outside ${low} to ${high}"
+    die 1 "FAIL: ${label}: ${value} is outside ${low} to ${high}"
+  fi
+  story::narrate "PASS: ${label}: ${value} (limits ${low} to ${high})"
+}
