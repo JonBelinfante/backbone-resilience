@@ -1,0 +1,52 @@
+# House Python standard: the settings of the checkers (see docs/python-standard.md).
+# Run them with pg-replication/scripts/check-python.sh. Waivers are not allowed in code: no
+# noqa and no type: ignore comments (the check refuses them), so the rules below are the rules.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["python-standard/fixtures/bad_*.py"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # PEP 8 layout (pycodestyle)
+    "F",         # unused names and other mistakes (pyflakes)
+    "I",         # import order
+    "N",         # PEP 8 naming
+    "D",         # PEP 257 docstrings
+    "UP",        # use current Python syntax
+    "B",         # likely bugs (bugbear)
+    "C4", "SIM", "RET", "PERF", "PTH",  # simpler code
+    "C90",       # complexity
+    "PL",        # pylint subset: too many arguments, statements, branches
+    "S",         # security (bandit): hard-coded secrets, shell injection, asserts
+    "ANN",       # every function is annotated
+    "T20",       # no print: use logging
+    "BLE", "TRY", "EM",  # exceptions: no blind except, no long messages inline
+    "LOG", "G",  # logging used correctly
+    "DTZ",       # no naive datetimes
+    "FBT",       # no boolean positional arguments
+    "A", "ARG", "ERA", "PGH", "RUF",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-args = 4
+max-statements = 40
+max-branches = 10
+
+[tool.ruff.lint.per-file-ignores]
+"**/test_*.py" = ["S101", "PLR2004"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+addopts = "-p no:cacheprovider"

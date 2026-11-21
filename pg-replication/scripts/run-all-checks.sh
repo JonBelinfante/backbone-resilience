@@ -38,6 +38,7 @@ goes to a temporary file that is removed afterwards.
 
   lint       lint-scripts.sh: bash syntax, shellcheck, the Bash standard (needs BASHCHECK_WRAPPER)
   docs       check-docs.sh: relative links resolve, and named functions exist and are cited correctly
+  python     check-python.sh: the house Python standard (ruff, mypy, pytest) and its own fixtures
   roundtrip  test-failover-roundtrip.sh: the 17-step failover test (needs the stack up)
 
 Options:
@@ -78,6 +79,9 @@ run_checks() {
     failures=$(( failures + 1 ))
   fi
   if ! run_check docs bash "${SCRIPT_DIR}check-docs.sh"; then
+    failures=$(( failures + 1 ))
+  fi
+  if ! run_check python bash "${SCRIPT_DIR}check-python.sh"; then
     failures=$(( failures + 1 ))
   fi
   if [[ "${run_roundtrip}" == 'yes' ]]; then
