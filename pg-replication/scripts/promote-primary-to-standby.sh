@@ -164,7 +164,10 @@ rebuild_data_directory() {
       clone_old_primary
       ;;
     *)
-      rewind_old_primary
+      if ! rewind_old_primary; then
+        log WARN "DECISION: pg_rewind of ${PRIMARY_CONTAINER} failed: cloning it instead"
+        clone_old_primary
+      fi
       ;;
   esac
 }

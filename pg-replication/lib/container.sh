@@ -122,6 +122,43 @@ container::stop() {
   docker stop "${options[@]}" "${container}" > /dev/null
 }
 
+# Kill the container's processes at once (SIGKILL): no clean shutdown, as in a crash.
+container::kill() {
+  local container="${1:?container required}"
+
+  log INFO "CHANGE: killing ${container} (SIGKILL)"
+  docker kill "${container}" > /dev/null
+}
+
+# Cut the container off its network: it keeps running, but no other container can reach it and it
+# cannot reach them (a network partition of one node). Published host ports are unaffected until
+# it is reconnected.
+container::disconnect() {
+  local container="${1:?container required}"
+  local network
+
+  network="$(container::network "${container}")"
+  log INFO "CHANGE: disconnecting ${container} from ${network}"
+  docker network disconnect "${network}" "${container}"
+}
+
+# Put the container back on its network. Does nothing if it is already attached.
+container::connect() {
+  local container="${1:?container required}"
+  local network
+  local attached
+  local template="{{range \$name, \$unused := .NetworkSettings.Networks}}{{\$name}} {{end}}"
+
+  network="$(container::network "${container}")"
+  attached="$(container::inspect "${container}" "${template}")"
+  if [[ " ${attached} " == *" ${network} "* ]]; then
+    log INFO "${container} is already on ${network}"
+    return 0
+  fi
+  log INFO "CHANGE: reconnecting ${container} to ${network}"
+  docker network connect "${network}" "${container}"
+}
+
 # Wait until the container's health check passes, giving up after the given number of tries.
 # Usage: container::wait_healthy CONTAINER ATTEMPTS PAUSE_SECONDS
 container::wait_healthy() {
