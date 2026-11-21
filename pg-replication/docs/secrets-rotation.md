@@ -72,7 +72,11 @@ superuser. The order matters.
 | A1 | the **writer** | `ALTER ROLE replicator PASSWORD :'pw'` | the new hash replicates to the standby by itself |
 | A2 | the standby | `ALTER SYSTEM SET primary_conninfo = ...new password...`, then `SELECT pg_reload_conf()` | the WAL receiver restarts on reload and reconnects with the new password |
 | A3 | the host | write the new value into `secrets/pg-replication-password.txt` **in place** | later rebuilds and clones read this file |
-| A4 | the writer | `SELECT pg_terminate_backend(pid) FROM pg_stat_replication` | forces a reconnect and so proves the new password is really in use. **Costly:** the standby waits up to 5 s before it reconnects (wal_retrieve_retry_interval), and under synchronous replication every commit waits too. The reload in A2 already restarts the WAL receiver with a fresh login, so A4 is only needed to prove the *stored* settings, and `rotate-secret.sh` leaves it out |
+| A4 | the writer | `SELECT pg_terminate_backend(pid) FROM pg_stat_replication` | forces a reconnect, to prove the stored settings (costly: see below) |
+
+**Cost of A4:** the standby waits up to 5 s before it reconnects (wal_retrieve_retry_interval), and under synchronous
+replication every commit waits too. The reload in A2 already restarts the WAL receiver with a fresh login, so A4 is only
+needed to prove the *stored* settings; `rotate-secret.sh` leaves it out.
 
 **The window:** between A1 and A2 the writer already wants the new password and the standby still presents the old
 one. If the replication link drops inside that window, the standby cannot come back ("password authentication
@@ -160,13 +164,17 @@ rebuild is running.
 6. Run `bash scripts/run-all-checks.sh` (the round trip rebuilds and clones with the new secret).
 7. After the soak period, B7.
 
-The secret reaches `psql` like this: the first line of standard input is the secret, the rest is the SQL.
+The secret reaches `psql` like this: the first line of standard input is the secret, the rest is the SQL. This is
+`access::run_sql` in [lib/access.sh](../lib/access.sh).
 
 ```bash
-{ cat new-password.file; printf '\n%s\n' "${sql}"; } |
+{
+  cat -- "${secret_file}"
+  printf '\n%s\n' "${sql}"
+} |
   docker exec -i "${node}" sh -c \
     'IFS= read -r NEWPW; export NEWPW; exec psql -U postgres -d appdb -X -v ON_ERROR_STOP=1 -q'
-# in the SQL:  \getenv pw NEWPW   then   ALTER ROLE replicator PASSWORD :'pw';
+# in the SQL:  \getenv pw NEWPW   then   ALTER ROLE replicator_a PASSWORD :'pw';
 ```
 
 ## 9. Evidence
@@ -185,8 +193,8 @@ The secret reaches `psql` like this: the first line of standard input is the sec
 | 7 | **The window**: synchronous, password changed, link killed *before* the standby had the new password | standby log: "password authentication failed for user replicator"; the link stayed down; **one commit stalled for 9.2 s**; 0 inserts failed, 0 lost; recovered as soon as the standby was given the new password |
 | 8 | Method A in the safe order, original password restored, synchronous | 42 inserts, 0 failed, slowest 319 ms |
 | 9 | Superuser, Method A | new password logged in over TCP to both nodes; the old password was refused; the failover and fail-back round trip (including `pg_rewind`) passed with the new password |
-| 10 | Cleanup, and the append fix (2026-11-21) | after the fix each node holds exactly 1 primary_conninfo line after a full round trip and after a standby built from an empty volume; 9 more hard kills ended with 1 per node |
-| 11 | Cleanup of the 2026-11-20 session | both secret files byte-identical to the originals; temporary role and `pg_hba.conf` lines gone from both nodes; asynchronous mode; one streaming standby |
+| 10 | Cleanup of the 2026-11-20 session | both secret files byte-identical to the originals; temporary role and `pg_hba.conf` lines gone from both nodes; asynchronous mode; one streaming standby |
+| 11 | The append fix (2026-11-21) | after the fix each node holds exactly 1 primary_conninfo line after a full round trip and after a standby built from an empty volume; 9 more hard kills ended with 1 per node |
 | 12 | `rotate-secret.sh` replication, by overlap (2026-11-21) | `replicator` became replicator_a in 1.6 s: role created, allowed on both nodes, proven alone, standby moved, files updated in place and seen by both containers, old role dropped, its `pg_hba.conf` line removed on both nodes, no temporary files left |
 | 13 | `test-rotation.sh`, three runs | each run rotated replication, superuser, replication again under a write probe (32 to 50 rows per run): **0 failed writes**, the standby always streamed as the role in the secret file, one replication role left, the superuser file password logged in over the network, and a standby built from an **empty volume** joined with the rotated secret files |
 | 14 | `test-hard-kill.sh --target rotate` | 25 SIGKILLs of `rotate-secret.sh` at 0.1 s to 1.3 s (the whole run is about 1.3 s): re-running it recovered every time, with the standby streaming as the role the files name, one replication role left, and the files' login working |
@@ -200,13 +208,13 @@ caused a 9.2 s stall. A light, single-writer probe does not show how long a real
 | ID | Gap | Detail and next step |
 |---|---|---|
 | SEC-01 | **No script and no automatic test: fixed 2026-11-21** | `rotate-secret.sh` (overlap for replication, in place for the superuser, rollback before the files change, converges when re-run), `test-rotation.sh` and `test-hard-kill.sh --target rotate`. Still manual: choosing when to rotate and the soak period (`--keep-old` stops at NOLOGIN) |
-| SEC-02 | **Stale passwords piled up on disk: fixed 2026-11-21** | `container::mark_standby` and the standby entrypoint used to *append* primary_conninfo on every rebuild, so a rotated-out password stayed in the file in plain text (88 lines on the primary, 3 on the standby). Both now replace the two settings in a new file moved into place. `test-hard-kill.sh` fails if any node holds more than one |
+| SEC-02 | **Stale passwords piled up on disk: fixed 2026-11-21** | `container::mark_standby` and the standby entrypoint *appended* primary_conninfo on every rebuild, so a rotated-out password stayed in the file in plain text (88 lines on the primary, 3 on the standby). Both now replace the two settings in a new file moved into place, and `test-hard-kill.sh` fails if a node holds more than one |
 | SEC-03 | **The replication role name was hard-coded: fixed 2026-11-21** | It is now the `pg-replication-user` secret file (see section 5) |
 | SEC-04 | **File secrets are a development convenience** | Plain files on the developer's machine, and primary_conninfo holds the password in plain text. A real system needs a secret manager and certificate or token authentication |
 | SEC-05 | **Edits that replace the file** | An in-place write reached the container. An editor that saves by creating a new file changes the inode and may not. Always compare checksums, as in the runbook. Recreating a container to pick up a secret restarts that node |
 | SEC-06 | **Application clients** | The platform's services will have their own database role. They need the same overlap (two roles, or a connection pool that re-authenticates), and a test that rotates under load |
 | SEC-07 | **Very long windows and heavy load** | Not measured |
-| SEC-08 | **The in-place file write is not atomic** | `cat new > file` truncates then writes, so a container could read an empty file for a moment. Rotation must not overlap a rebuild or clone; `rotate-secret.sh` refuses while a rebuild is pending or the standby is not streaming, but nothing stops a rebuild being started during a rotation (a lock is the next step) |
+| SEC-08 | **The in-place file write is not atomic** | `cat new > file` truncates then writes, so a container could read an empty file for a moment. `rotate-secret.sh` refuses to start while a rebuild is pending or the standby is not streaming, but nothing stops a rebuild starting during a rotation. Next step: a lock |
 
 ## Related
 
