@@ -67,7 +67,11 @@ superuser password would otherwise be open to the whole network.
 | `promote-standby-to-primary.sh` | Makes `pg-standby` the writable node (refuses while `pg-primary` answers, unless `--force`) |
 | `promote-primary-to-standby.sh` | Rebuilds the stopped old primary as a standby of the new writer: slot, checkpoint, `pg_rewind`, standby settings, start, wait until streaming |
 | `test-failover-roundtrip.sh` | 17-step test that tells its story (every line has a UTC time and the script name, with each SQL statement, the data it returned and each script's output): drop tables, replicate a row, fail over, write on the promoted standby, rejoin the old primary, write while the replica is down, compare both databases |
-| `restore-starting-state.sh` | Reads the current roles and returns to the starting state (`pg-primary` writes, `pg-standby` replicates): starts a stopped node, or fails back with `pg_rewind` after a failover. Run it after any experiment |
+| `restore-starting-state.sh` | Reads the current roles and returns to the starting state (`pg-primary` writes, `pg-standby` replicates): starts a stopped node, or fails back with `pg_rewind` after a failover. Run it after any experiment. It ends only when the primary reports the standby as streaming, and rebuilds a standby that cannot be trusted (`pg_basebackup`) |
+| `test-hard-kill.sh [--target roundtrip\|restore] [--delays LIST]` | Kills a script and its docker commands with SIGKILL at each delay, then requires `restore-starting-state.sh` to recover the stack (primary writes, standby streaming). Changes the databases: throwaway stack only |
+| `test-divergence-rewind.sh` | 10-step test of a true divergence: the standby stops following, the primary acknowledges 3 writes it never receives, the standby is promoted (forced), then `pg_rewind` rebuilds the old primary. Requires a real rewind, the 3 writes gone and identical rows on both nodes. Changes the databases: throwaway stack only |
+| `test-replica-lag.sh` | 8-step test: the standby applies changes 6 s late; two debits decided on the replica both pass and overdraw the account (negative control), decided on the writer the second is declined; the guard `database::read_for_decision` refuses a replica; a replica read after `database::wait_for_replay` is fresh. Changes the databases: throwaway stack only |
+| `test-slot-limit.sh` | 7-step test of the WAL limit for a dead standby: stops the standby and writes WAL until its slot is invalidated (about 1 GB, about 1.5 minutes), requires the primary to keep accepting writes with a bounded WAL directory, the standby to fail to stream, and `restore-starting-state.sh` to re-clone it and replace the slot. Needs 6 GB free. Changes the databases: throwaway stack only |
 | `run-all-checks.sh [--skip-roundtrip]` | One line per check: `PASS lint`, `PASS docs`, `PASS roundtrip`. A failure also prints the last 15 lines of that check's output |
 | `check-docs.sh` | Read-only check of the documents: every relative link must exist, and every function named in `docs/` must be defined in a script (and, on a line that links a script, defined in that script). Uses `check-docs.awk` |
 | `report-refactoring.sh [--mode MODE] [--show NAME]` | Read-only refactoring aid. Modes: `duplicates`, `usage` (reuse map), `size`, `all`, `brief` (one tagged line per finding), `baseline` (save `refactor-baseline.txt`), `changes` (diff against it). `--show NAME` prints every copy of a function and how they differ. Uses `report-refactoring.awk` |
@@ -104,8 +108,8 @@ Logs live inside this OneDrive folder; they are small text files, but set `LOG_D
 
 ## Patterns and diagrams
 
-The robustness patterns the scripts use (promotion guard, split-brain guard, verify after act) are explained in
-[docs/patterns/](docs/patterns/README.md). The role state machine and the 17-step failover sequence are in
+The robustness patterns the scripts use (promotion guard, split-brain guard, verify after act, decisions read the writer) are explained in
+[docs/patterns/](docs/patterns/README.md). How to rotate the database passwords without losing availability is in [docs/secrets-rotation.md](docs/secrets-rotation.md). The role state machine and the 17-step failover sequence are in
 [docs/diagrams/](docs/diagrams/).
 
 ## What is proven

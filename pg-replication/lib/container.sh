@@ -5,6 +5,16 @@
 # Exit codes: none (the functions return, or call die of the script that imported them)
 
 readonly CONTAINER_NAME_PATTERN='^[A-Za-z0-9][A-Za-z0-9_.-]*$'
+readonly CONTAINER_CLONE_USER='replicator'
+readonly CONTAINER_MARK_KEEP="sed -e '/^primary_conninfo/d' -e '/^primary_slot_name/d'"
+readonly CONTAINER_MARK_FILTER="${CONTAINER_MARK_KEEP} postgresql.auto.conf > postgresql.auto.new"
+readonly CONTAINER_MARK_START='umask 077 && touch postgresql.auto.conf'
+readonly CONTAINER_MARK_PROGRAM="${CONTAINER_MARK_START} && ${CONTAINER_MARK_FILTER}"
+readonly CONTAINER_MARK_FINISH='cat >> postgresql.auto.new && touch standby.signal'
+readonly CONTAINER_MARK_MOVE='mv postgresql.auto.new postgresql.auto.conf'
+readonly CONTAINER_CLONE_EMPTY="find \"\$1\" -mindepth 1 -delete"
+readonly CONTAINER_CLONE_COPY="pg_basebackup -h \"\$2\" -p \"\$3\" -U \"\$4\" -D \"\$1\" -X stream"
+readonly CONTAINER_CLONE_PROGRAM="${CONTAINER_CLONE_EMPTY} && ${CONTAINER_CLONE_COPY}"
 
 # Print the container name for a database ("primary" or "standby"); the two names are passed in.
 # Usage: container::name_of DATABASE PRIMARY_CONTAINER STANDBY_CONTAINER
@@ -184,6 +194,78 @@ container::rewind() {
     --progress
 }
 
+# Rebuild the target's data volume from nothing: empty it, then copy the source with
+# pg_basebackup in a throwaway container. Use it when pg_rewind cannot be trusted, for example
+# after a run that was killed in the middle of a rebuild. The target must be stopped; call
+# container::mark_standby afterwards to make the copy follow the source.
+# Usage: container::clone TARGET_CONTAINER SOURCE_CONTAINER PORT
+container::clone() {
+  local target="${1:?target container required}"
+  local source="${2:?source container required}"
+  local port="${3:?port required}"
+  local image
+  local network
+  local volume
+  local password
+  local data_dir
+
+  image="$(container::image "${target}")"
+  network="$(container::network "${target}")"
+  volume="$(container::volume "${target}")"
+  password="$(container::secret "${source}" pg-replication-password)"
+  data_dir="$(container::setting "${source}" PGDATA)"
+  log INFO "CHANGE: emptying volume ${volume} and cloning ${source} into it"
+  PGPASSWORD="${password}" docker run \
+    --rm \
+    --user postgres \
+    --network "${network}" \
+    --env PGPASSWORD \
+    --volume "${volume}:${data_dir}" \
+    --entrypoint sh \
+    "${image}" \
+    -c "${CONTAINER_CLONE_PROGRAM}" \
+    sh \
+    "${data_dir}" \
+    "${source}" \
+    "${port}" \
+    "${CONTAINER_CLONE_USER}"
+}
+
+# Print how many primary_conninfo lines the container's postgresql.auto.conf holds. Each node
+# should hold at most one: an extra line is an old password left on disk.
+container::conninfo_count() {
+  local container="${1:?container required}"
+  local data_dir
+  local settings
+  local count
+
+  data_dir="$(container::setting "${container}" PGDATA)"
+  settings="${data_dir}/postgresql.auto.conf"
+  if count="$(docker exec "${container}" grep -c '^primary_conninfo' "${settings}")"; then
+    printf '%s\n' "${count}"
+    return 0
+  fi
+  [[ "${count}" == '0' ]] || die 1 "could not read ${settings} in ${container}"
+  printf '0\n'
+}
+
+# Print the megabytes free on the filesystem that holds a path inside the container.
+# Usage: container::free_megabytes CONTAINER PATH
+container::free_megabytes() {
+  local container="${1:?container required}"
+  local path="${2:?path required}"
+  local output
+  local -a lines=()
+  local -a fields=()
+
+  output="$(docker exec "${container}" df -Pk "${path}")"
+  if [[ -n "${output}" ]]; then
+    mapfile -t lines <<< "${output}"
+  fi
+  read -r -a fields <<< "${lines[1]-}"
+  printf '%d\n' "$(( ${fields[3]:-0} / 1024 ))"
+}
+
 # Print the two settings lines that make a data directory follow the writable node.
 container::standby_settings() {
   local conninfo="${1:?connection string required}"
@@ -193,15 +275,16 @@ container::standby_settings() {
   printf "primary_slot_name = '%s'\n" "${slot}"
 }
 
-# Mark the target's data directory as a standby of the source. The settings are appended, so
-# they override the copies pg_rewind brought over (the last occurrence in the file wins).
+# Mark the target's data directory as a standby of the source. The two settings replace any
+# copies that pg_rewind or pg_basebackup brought over (an appended line would leave the old
+# password in the file), and the file is replaced in one step so a killed run cannot half-write it.
 # Usage: container::mark_standby TARGET_CONTAINER SOURCE_CONTAINER CONNINFO SLOT
 container::mark_standby() {
   local target="${1:?target container required}"
   local source="${2:?source container required}"
   local conninfo="${3:?connection string required}"
   local slot="${4:?slot required}"
-  local program='touch standby.signal && cat >> postgresql.auto.conf'
+  local program="${CONTAINER_MARK_PROGRAM} && ${CONTAINER_MARK_FINISH} && ${CONTAINER_MARK_MOVE}"
   local image
   local volume
   local data_dir

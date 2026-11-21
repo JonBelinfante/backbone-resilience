@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Return the two databases to their starting roles: primary writes, standby replicates.
 # Usage: restore-starting-state.sh [-h | --help]
-# Requires: bash cat
+# Requires: bash cat sleep
 # Exit codes: 0 success, 1 failure, 2 usage or configuration error
 
 set -Eeuo pipefail
@@ -23,6 +23,8 @@ readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
 # started by its bare name), so paths to sibling files work however the script is started.
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
+readonly STREAM_ATTEMPTS=30
+readonly STREAM_PAUSE_SECONDS=2
 
 # shellcheck source=./runtime.sh
 source "${SCRIPT_DIR}runtime.sh"
@@ -39,8 +41,10 @@ Usage: restore-starting-state.sh [-h | --help]
 Return the databases to their starting roles: pg-primary accepting writes and
 pg-standby replicating from it. Run it after a failover experiment, or let the
 round-trip test run it. It reads the current roles and decides:
-  primary writer, standby replica   nothing to do
+  primary writer, standby replica   nothing to do (the standby must be streaming)
   one node stopped, the other fine  start the stopped node
+  standby cannot start or is not    rebuild it: empty it and copy the primary
+    streaming
   standby is the writer             fail back: rebuild the primary as its standby, stop
                                     the standby, promote the primary, rebuild the standby
 Any other combination is refused. Failing back under asynchronous replication can lose
@@ -101,6 +105,49 @@ wait_for_running_node() {
   fi
 }
 
+# Succeed if the primary reports one streaming standby within STREAM_ATTEMPTS tries.
+wait_for_streaming() {
+  local attempt=1
+  local streaming
+
+  while (( attempt <= STREAM_ATTEMPTS )); do
+    streaming="$(database::streaming_count "${PRIMARY_CONTAINER}")"
+    if [[ "${streaming}" == '1' ]]; then
+      log INFO "${STANDBY_CONTAINER} is streaming from ${PRIMARY_CONTAINER}"
+      return 0
+    fi
+    attempt=$(( attempt + 1 ))
+    sleep "${STREAM_PAUSE_SECONDS}"
+  done
+  log WARN "${STANDBY_CONTAINER} is not streaming after ${STREAM_ATTEMPTS} attempts"
+  return 1
+}
+
+# Replace the standby's data with a fresh copy of the primary: stop it, empty it, copy.
+rebuild_standby() {
+  log INFO 'DECISION: the standby cannot be trusted: rebuilding it from the primary'
+  bash "${SCRIPT_DIR}bring-down-database.sh" --database standby
+  run_with_roles \
+    "${STANDBY_CONTAINER}" \
+    "${PRIMARY_CONTAINER}" \
+    promote-primary-to-standby.sh \
+    --clone
+}
+
+# Start the stopped standby; if it cannot be started safely (it was a writer too), rebuild it.
+start_or_rebuild_standby() {
+  if ! bash "${SCRIPT_DIR}bring-up-database.sh" --database standby; then
+    rebuild_standby
+  fi
+}
+
+# Rebuild the standby if the primary does not report it as streaming.
+rebuild_standby_unless_streaming() {
+  if ! wait_for_streaming; then
+    rebuild_standby
+  fi
+}
+
 # Return the writer role to the primary after a failover. The primary is rebuilt as a standby
 # of the current writer first if it is stopped, then the roles are swapped back.
 fail_back() {
@@ -128,10 +175,10 @@ restore_starting_state() {
   log INFO "DECISION: roles are ${primary_role}/${standby_role} (primary/standby)"
   case "${primary_role}/${standby_role}" in
     writer/replica)
-      log INFO 'already in the starting state'
+      rebuild_standby_unless_streaming
       ;;
     writer/stopped)
-      bash "${SCRIPT_DIR}bring-up-database.sh" --database standby
+      start_or_rebuild_standby
       ;;
     stopped/replica)
       bash "${SCRIPT_DIR}bring-up-database.sh" --database primary
@@ -155,8 +202,11 @@ check_starting_state() {
   if [[ "${primary_role}/${standby_role}" != 'writer/replica' ]]; then
     die 1 "restore failed: roles are ${primary_role}/${standby_role} (primary/standby)"
   fi
+  wait_for_streaming || die 1 "restore failed: ${STANDBY_CONTAINER} is not streaming"
   log INFO 'starting state confirmed'
-  printf '%s accepts writes and %s replicates\n' "${PRIMARY_CONTAINER}" "${STANDBY_CONTAINER}"
+  printf '%s accepts writes and %s is streaming from it\n' \
+    "${PRIMARY_CONTAINER}" \
+    "${STANDBY_CONTAINER}"
 }
 
 # Script entry point.
@@ -183,7 +233,7 @@ main() {
   done
 
   (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
-  require_commands bash cat
+  require_commands bash cat sleep
   restore_starting_state
   check_starting_state
 }

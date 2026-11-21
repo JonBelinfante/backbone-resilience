@@ -251,19 +251,46 @@ clone_primary() {
   done
 }
 
+# Print a settings file without its primary_conninfo and primary_slot_name lines. The clone
+# carries the other node's copies of both, and a stale line would keep an old password on disk.
+# Usage: keep_other_settings FILE
+keep_other_settings() {
+  local file="${1:?file required}"
+  local line
+
+  while IFS= read -r line; do
+    case "${line}" in
+      primary_conninfo* | primary_slot_name*)
+        continue
+        ;;
+      *)
+        printf '%s\n' "${line}"
+        ;;
+    esac
+  done < "${file}"
+}
+
 # Turn the clone into a standby. standby.signal means: start in recovery and stream from
 # primary_conninfo. application_name is what the primary reports in pg_stat_replication and
-# what synchronous_standby_names matches (see scripts/set-replication-mode.sh).
+# what synchronous_standby_names matches (see scripts/set-replication-mode.sh). The two settings
+# replace any earlier ones, in a new file moved into place, so a killed run leaves either the
+# old file or the new one, never a half-written one.
 mark_as_standby() {
+  local settings="${PGDATA}/postgresql.auto.conf"
   local conninfo="host=${PRIMARY_HOST} port=${PRIMARY_PORT} user=${REPLICATION_USER}"
   local password
+  local replaced
 
   password="$(< "${REPLICATION_PASSWORD_FILE}")"
   conninfo+=" password=${password} application_name=${STANDBY_NAME}"
   gosu postgres touch "${PGDATA}/standby.signal"
-  printf '%s\n' "primary_conninfo = '${conninfo}'" >> "${PGDATA}/postgresql.auto.conf"
-  printf '%s\n' "primary_slot_name = '${STANDBY_SLOT}'" >> "${PGDATA}/postgresql.auto.conf"
-  chown postgres:postgres "${PGDATA}/postgresql.auto.conf"
+  replaced="$(mktemp "${settings}.XXXXXX")"
+  CLEANUP_PATHS+=("${replaced}")
+  keep_other_settings "${settings}" > "${replaced}"
+  printf '%s\n' "primary_conninfo = '${conninfo}'" >> "${replaced}"
+  printf '%s\n' "primary_slot_name = '${STANDBY_SLOT}'" >> "${replaced}"
+  chown postgres:postgres "${replaced}"
+  mv -- "${replaced}" "${settings}"
 }
 
 # First start only: clone the primary and mark the clone as a standby.

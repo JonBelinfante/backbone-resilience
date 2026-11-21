@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # script-kind: executable
 # Purpose: Turn the stopped old primary into a standby of the current writable node (pg_rewind).
-# Usage: promote-primary-to-standby.sh [-h | --help]
-# Requires: bash cat sleep
+# Usage: promote-primary-to-standby.sh [-h | --help] [--clone]
+# Requires: bash cat rm sleep touch
 # Exit codes: 0 success, 1 failure, 2 usage or configuration error
 
 set -Eeuo pipefail
@@ -22,6 +22,7 @@ readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
 readonly REPLICATION_USER="${REPLICATION_USER:-replicator}"
 readonly STANDBY_NAME="${STANDBY_NAME:-standby1}"
 readonly STANDBY_SLOT="${STANDBY_SLOT:-standby1_slot}"
+readonly REBUILD_MARKER_DIR="${REBUILD_MARKER_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
@@ -30,6 +31,7 @@ readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 readonly DATABASE_PORT=5432
 readonly STREAM_ATTEMPTS=30
 readonly STREAM_PAUSE_SECONDS=1
+readonly MARKER_PATH="${REBUILD_MARKER_DIR}/rebuild-pending-${PRIMARY_CONTAINER}"
 
 # shellcheck source=./runtime.sh
 source "${SCRIPT_DIR}runtime.sh"
@@ -41,15 +43,14 @@ source "${SCRIPT_DIR}../lib/database.sh"
 # Print how to run this script.
 usage() {
   cat <<'USAGE'
-Usage: promote-primary-to-standby.sh [-h | --help]
+Usage: promote-primary-to-standby.sh [-h | --help] [--clone]
 
-Rebuild the old primary as a standby of the node that took over after a failover.
-Stop the old primary first (bring-down-database.sh --database primary) and promote
-the other node (promote-standby-to-primary.sh).
+Rebuild the stopped old primary as a standby of the node that took over (pg_rewind),
+start it and wait until it streams. Passwords come from the writer's environment.
+A rebuild-pending marker is kept while the data directory changes; if an earlier rebuild
+left it behind, the node is emptied and copied (pg_basebackup) instead.
 
-The script checks both, creates the replication slot and a checkpoint on the writer,
-runs pg_rewind on the old primary, marks it as a standby, starts it and waits
-until it streams. The passwords are read from the writer container's environment.
+  --clone  always copy the whole data directory instead of running pg_rewind
 
 Environment:
   PRIMARY_CONTAINER  the stopped old primary (default: pg-primary)
@@ -57,6 +58,7 @@ Environment:
   REPLICATION_USER   streaming role (default: replicator)
   STANDBY_NAME       application_name of the standby (default: standby1)
   STANDBY_SLOT       replication slot for the standby (default: standby1_slot)
+  REBUILD_MARKER_DIR where the pending marker is kept (default: temporary directory)
   RUN_LOG_DIR        directory for the run log (default: temporary directory)
 
 Exit codes: 0 success, 1 failure, 2 usage or configuration error
@@ -86,6 +88,23 @@ check_writer_is_writable() {
   log INFO "${STANDBY_CONTAINER} is accepting writes"
 }
 
+# Drop the standby's slot on the writable node if it is inactive and no longer protects WAL
+# (wal_status other than reserved or extended: lost, unreserved, or no position). A slot that
+# was invalidated keeps reporting unreserved after the standby is rebuilt and streaming, so it
+# would silently stop protecting the standby's WAL; a new slot starts clean.
+replace_unusable_slot() {
+  log INFO 'checking that the replication slot still protects WAL'
+  local sql='select count(pg_drop_replication_slot(slot_name)) from pg_replication_slots'
+  local dropped
+
+  sql+=" where slot_name = '${STANDBY_SLOT}' and not active"
+  sql+=" and coalesce(wal_status, 'lost') not in ('reserved', 'extended')"
+  dropped="$(database::bare "${STANDBY_CONTAINER}" <<< "${sql}")"
+  if [[ "${dropped}" != '0' ]]; then
+    log INFO "DECISION: dropped ${STANDBY_SLOT} on ${STANDBY_CONTAINER}: it no longer protects WAL"
+  fi
+}
+
 # Create the standby's replication slot on the writable node if it does not exist.
 ensure_replication_slot() {
   local create="select pg_create_physical_replication_slot('${STANDBY_SLOT}')"
@@ -93,6 +112,7 @@ ensure_replication_slot() {
   local named=" where slot_name = '${STANDBY_SLOT}')"
 
   log INFO 'making sure the replication slot exists on the writable node'
+  replace_unusable_slot
   log INFO "CHANGE: ensuring slot ${STANDBY_SLOT} exists on ${STANDBY_CONTAINER}"
   database::bare "${STANDBY_CONTAINER}" <<< "${create}${missing}${named}" > /dev/null
 }
@@ -108,6 +128,54 @@ checkpoint_writer() {
 rewind_old_primary() {
   log INFO 'rewinding the old primary to the new timeline'
   container::rewind "${PRIMARY_CONTAINER}" "${STANDBY_CONTAINER}" "${DATABASE_PORT}"
+}
+
+# Copy the writable node's whole data directory over the old primary's (see container::clone).
+clone_old_primary() {
+  log INFO 'cloning the old primary from the writable node'
+  container::clone "${PRIMARY_CONTAINER}" "${STANDBY_CONTAINER}" "${DATABASE_PORT}"
+}
+
+# Print how to rebuild the old primary: clone when asked or when an earlier rebuild was
+# interrupted (the marker is still there), otherwise rewind.
+# Usage: choose_method REQUESTED   (REQUESTED is auto or clone)
+choose_method() {
+  local requested="${1:?requested method required}"
+
+  log INFO 'choosing how to rebuild the old primary'
+  if [[ "${requested}" == 'clone' ]]; then
+    printf 'clone\n'
+  elif [[ -e "${MARKER_PATH}" ]]; then
+    log WARN "DECISION: an earlier rebuild of ${PRIMARY_CONTAINER} did not finish: cloning"
+    printf 'clone\n'
+  else
+    printf 'rewind\n'
+  fi
+}
+
+# Write the pending marker, then rebuild the data directory by the chosen method.
+# Usage: rebuild_data_directory METHOD
+rebuild_data_directory() {
+  log INFO 'rebuilding the data directory'
+  local method="${1:?method required}"
+
+  log INFO "CHANGE: writing the rebuild-pending marker ${MARKER_PATH}"
+  touch -- "${MARKER_PATH}"
+  case "${method}" in
+    clone)
+      clone_old_primary
+      ;;
+    *)
+      rewind_old_primary
+      ;;
+  esac
+}
+
+# Remove the pending marker: the rebuild finished and the node streams.
+clear_rebuild_marker() {
+  log INFO 'clearing the rebuild-pending marker'
+  log INFO "CHANGE: removing the rebuild-pending marker ${MARKER_PATH}"
+  rm -f -- "${MARKER_PATH}"
 }
 
 # Mark the rewound data directory as a standby of the writable node (see container::mark_standby).
@@ -161,8 +229,18 @@ report_result() {
   printf '%s is now a standby of %s\n' "${PRIMARY_CONTAINER}" "${STANDBY_CONTAINER}"
 }
 
+# Check both nodes and get the writable node ready to be followed.
+prepare_rebuild() {
+  log INFO 'preparing the rebuild'
+  check_old_primary_stopped
+  check_writer_is_writable
+  ensure_replication_slot
+  checkpoint_writer
+}
+
 # Script entry point.
 main() {
+  local requested='auto'
   start_run_log "$@"
 
   while (( $# > 0 )); do
@@ -170,6 +248,10 @@ main() {
       -h | --help)
         usage
         return 0
+        ;;
+      --clone)
+        requested='clone'
+        shift
         ;;
       --)
         shift
@@ -185,16 +267,14 @@ main() {
   done
 
   (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
-  require_commands bash cat sleep
+  require_commands bash cat rm sleep touch
   log INFO "DECISION: rebuilding ${PRIMARY_CONTAINER} as a standby of ${STANDBY_CONTAINER}"
-  check_old_primary_stopped
-  check_writer_is_writable
-  ensure_replication_slot
-  checkpoint_writer
-  rewind_old_primary
+  prepare_rebuild
+  rebuild_data_directory "$(choose_method "${requested}")"
   write_standby_settings
   start_old_primary
   wait_until_streaming
+  clear_rebuild_marker
   report_result
 }
 

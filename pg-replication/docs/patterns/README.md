@@ -13,7 +13,14 @@ Code references name a **function**, not a line number, so they survive edits. C
 |---|---|---|
 | [Promotion guard](promotion-guard.md) | Promoting a standby while the old primary still accepts writes creates two writers | FOV-02 (manual) |
 | [Split-brain guard](split-brain-guard.md) | A node restarted after failover comes back as a second writer | FOV-03 (manual) |
+| [Decisions read the writer](decisions-read-the-writer.md) | A decision made on a lagging replica approves what the writer would refuse | DEC-01 (auto) |
 | [Verify after act](verify-after-act.md) | An action reports success, but the data or state has not changed yet | REP-01 (auto), FOV-05, FOV-07 |
+
+## Related guide
+
+| Guide | Covers |
+|---|---|
+| [Rotating database secrets](../secrets-rotation.md) | Changing the superuser and replication passwords across two nodes with no gap, and what was measured |
 
 ## Diagrams
 
