@@ -15,9 +15,11 @@ fi
 shopt -s inherit_errexit
 
 # Environment: PRIMARY_CONTAINER and STANDBY_CONTAINER name the two containers as compose created
-# them (they keep these names after a failover, whatever their role then is).
+# them (they keep these names after a failover, whatever their role then is). REBUILD_MARKER_DIR
+# is where maintenance state is kept: rebuild markers and the maintenance lock.
 readonly PRIMARY_CONTAINER="${PRIMARY_CONTAINER:-pg-primary}"
 readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
+readonly REBUILD_MARKER_DIR="${REBUILD_MARKER_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
@@ -32,6 +34,8 @@ source "${SCRIPT_DIR}runtime.sh"
 source "${SCRIPT_DIR}../lib/container.sh"
 # shellcheck source=../lib/database.sh
 source "${SCRIPT_DIR}../lib/database.sh"
+# shellcheck source=../lib/lock.sh
+source "${SCRIPT_DIR}../lib/lock.sh"
 
 # Print how to run this script.
 usage() {
@@ -234,6 +238,7 @@ main() {
 
   (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
   require_commands bash cat sleep
+  lock::acquire "${REBUILD_MARKER_DIR}" "${SCRIPT_NAME}"
   restore_starting_state
   check_starting_state
 }

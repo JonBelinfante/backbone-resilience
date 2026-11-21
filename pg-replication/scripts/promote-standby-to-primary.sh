@@ -16,6 +16,7 @@ shopt -s inherit_errexit
 # Environment: PRIMARY_CONTAINER and STANDBY_CONTAINER name the two containers.
 readonly PRIMARY_CONTAINER="${PRIMARY_CONTAINER:-pg-primary}"
 readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
+readonly REBUILD_MARKER_DIR="${REBUILD_MARKER_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
@@ -26,6 +27,8 @@ readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 source "${SCRIPT_DIR}runtime.sh"
 # shellcheck source=../lib/database.sh
 source "${SCRIPT_DIR}../lib/database.sh"
+# shellcheck source=../lib/lock.sh
+source "${SCRIPT_DIR}../lib/lock.sh"
 
 # Print how to run this script.
 usage() {
@@ -129,6 +132,7 @@ main() {
   done
 
   (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
+  lock::acquire "${REBUILD_MARKER_DIR}" "${SCRIPT_NAME}"
   if [[ "${forced}" == 'no' ]]; then
     check_primary_unreachable
   fi

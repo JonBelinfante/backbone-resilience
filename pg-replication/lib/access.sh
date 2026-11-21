@@ -2,7 +2,7 @@
 # Purpose: Control access to the database nodes: set passwords, allow roles, probe logins.
 # Usage: source "${SCRIPT_DIR}../lib/access.sh", then call access::run_sql and others
 # Requires: cat docker
-# Depends: container
+# Depends: container database
 # Exit codes: none (the functions return, or call die of the script that imported them)
 
 readonly ACCESS_NAME_PATTERN='^[A-Za-z0-9][A-Za-z0-9_.-]*$'
@@ -109,4 +109,25 @@ access::probe_login() {
     printf '\n'
   } |
     docker exec -i "${source}" sh -c "${program}" sh "${target}" "${role}" > /dev/null 2>&1
+}
+
+# Create a replication role on the writer with the password in a file, or update the role if an
+# earlier run left it behind. The role is checked against ACCESS_ROLE_PATTERN first.
+# Usage: access::create_replication_role WRITER ROLE PASSWORD_FILE
+access::create_replication_role() {
+  local writer="${1:?writer required}"
+  local role="${2:?role required}"
+  local password_file="${3:?password file required}"
+  local sql="select count(*) from pg_roles where rolname = '${role}'"
+  local exists
+  local verb='CREATE'
+
+  [[ "${role}" =~ ${ACCESS_ROLE_PATTERN} ]] || die 2 "not a valid role name: ${role}"
+  exists="$(database::bare "${writer}" <<< "${sql}")"
+  if [[ "${exists}" == '1' ]]; then
+    verb='ALTER'
+  fi
+  log INFO "CHANGE: ${verb} ROLE ${role} on ${writer}"
+  printf '%s\n' '\getenv pw NEWPW' "${verb} ROLE ${role} WITH REPLICATION LOGIN PASSWORD :'pw';" |
+    access::run_sql "${writer}" "${password_file}"
 }

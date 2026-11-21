@@ -257,8 +257,10 @@ clone_primary() {
   done
 }
 
-# Print a settings file without its primary_conninfo and primary_slot_name lines. The clone
-# carries the other node's copies of both, and a stale line would keep an old password on disk.
+# Print a settings file without its primary_conninfo, primary_slot_name and
+# synchronous_standby_names lines. The clone carries the writer's copies: a stale line would keep
+# an old password on disk, and a standby that names a synchronous standby blocks all its writes
+# once it is promoted.
 # Usage: keep_other_settings FILE
 keep_other_settings() {
   local file="${1:?file required}"
@@ -266,7 +268,7 @@ keep_other_settings() {
 
   while IFS= read -r line; do
     case "${line}" in
-      primary_conninfo* | primary_slot_name*)
+      primary_conninfo* | primary_slot_name* | synchronous_standby_names*)
         continue
         ;;
       *)

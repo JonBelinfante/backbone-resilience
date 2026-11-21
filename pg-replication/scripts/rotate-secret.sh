@@ -16,8 +16,8 @@ shopt -s inherit_errexit
 
 # Environment: PRIMARY_CONTAINER and STANDBY_CONTAINER name the two containers as compose
 # created them; STANDBY_NAME is the standby's application_name. REBUILD_MARKER_DIR is where
-# promote-primary-to-standby.sh keeps its pending markers. TEMP_DIR holds the new secret until
-# the run ends (default: temporary directory).
+# maintenance state is kept: rebuild markers and the maintenance lock. TEMP_DIR holds the new
+# secret until the run ends (default: temporary directory).
 readonly PRIMARY_CONTAINER="${PRIMARY_CONTAINER:-pg-primary}"
 readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
 readonly STANDBY_NAME="${STANDBY_NAME:-standby1}"
@@ -50,6 +50,8 @@ source "${SCRIPT_DIR}../lib/container.sh"
 source "${SCRIPT_DIR}../lib/database.sh"
 # shellcheck source=../lib/access.sh
 source "${SCRIPT_DIR}../lib/access.sh"
+# shellcheck source=../lib/lock.sh
+source "${SCRIPT_DIR}../lib/lock.sh"
 
 # Print how to run this script.
 usage() {
@@ -136,26 +138,6 @@ wait_for_identity() {
   done
   log WARN "the standby is not streaming as ${role}"
   return 1
-}
-
-# Create the role on the writer with the new password, or update it if an earlier run left it.
-# Usage: create_identity WRITER ROLE NEW_FILE
-create_identity() {
-  log INFO 'creating the new replication identity on the writer'
-  local writer="${1:?writer required}"
-  local role="${2:?role required}"
-  local new_file="${3:?new file required}"
-  local sql="select count(*) from pg_roles where rolname = '${role}'"
-  local exists
-  local verb='CREATE'
-
-  exists="$(database::bare "${writer}" <<< "${sql}")"
-  if [[ "${exists}" == '1' ]]; then
-    verb='ALTER'
-  fi
-  log INFO "CHANGE: ${verb} ROLE ${role} on ${writer}"
-  printf '%s\n' '\getenv pw NEWPW' "${verb} ROLE ${role} WITH REPLICATION LOGIN PASSWORD :'pw';" |
-    access::run_sql "${writer}" "${new_file}"
 }
 
 # Allow the role to stream on both nodes (either may be the writer tomorrow) and reload them.
@@ -284,7 +266,7 @@ rotate_replication() {
     new_role="${ROLE_B}"
   fi
   log INFO "DECISION: moving the standby from ${old_role} to ${new_role}"
-  create_identity "${writer}" "${new_role}" "${new_file}"
+  access::create_replication_role "${writer}" "${new_role}" "${new_file}"
   allow_on_both_nodes "${new_role}"
   move_standby "${writer}" "${standby}" "${new_role}" "${new_file}"
   store_replication_files "${new_role}" "${new_file}"
@@ -388,6 +370,7 @@ main() {
   [[ "${kind}" == 'replication' || "${kind}" == 'superuser' ]] ||
     die 2 'secret is replication or superuser'
   require_commands cat cp mktemp openssl sleep
+  lock::acquire "${REBUILD_MARKER_DIR}" "${SCRIPT_NAME}"
   run_rotation "${kind}" "${keep_old}"
 }
 

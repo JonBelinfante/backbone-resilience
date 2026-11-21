@@ -16,10 +16,12 @@ shopt -s inherit_errexit
 
 # Environment: PRIMARY_CONTAINER and STANDBY_CONTAINER name the two containers as compose
 # created them. UP_PULL_POLICY is passed to docker compose up --pull. TEMP_DIR holds the probe's
-# files until the run ends (default: temporary directory).
+# files until the run ends (default: temporary directory). ROTATION_MODE is async (default) or
+# sync: in sync the standby must stay a synchronous standby and no write may stall.
 readonly PRIMARY_CONTAINER="${PRIMARY_CONTAINER:-pg-primary}"
 readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
 readonly UP_PULL_POLICY="${UP_PULL_POLICY:-missing}"
+readonly ROTATION_MODE="${ROTATION_MODE:-async}"
 readonly TEMP_DIR="${TEMP_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
@@ -35,6 +37,8 @@ readonly TEST_TABLE='rotation_probe'
 readonly SQL_PROBE_INSERT="insert into ${TEST_TABLE} default values"
 readonly SQL_ROW_COUNT="select count(*) from ${TEST_TABLE}"
 readonly SQL_STREAMING_ROLE="select usename from pg_stat_replication where state = 'streaming'"
+readonly SQL_SYNC_STATE="select sync_state from pg_stat_replication where state = 'streaming'"
+readonly STALL_LIMIT_MS=2000
 readonly SQL_WAL_POSITION='select pg_current_wal_lsn()'
 readonly SQL_ROLE_COUNT='select count(*) from pg_roles where rolreplication and not rolsuper'
 readonly PROBE_PAUSE_SECONDS=0.1
@@ -68,6 +72,8 @@ The secrets stay rotated afterwards (the replication role keeps the new name).
 The test changes the databases and the secret files: use it only on the throwaway stack.
 
 Environment: PRIMARY_CONTAINER, STANDBY_CONTAINER, UP_PULL_POLICY, TEMP_DIR, RUN_LOG_DIR.
+ROTATION_MODE=sync runs it under synchronous replication: the standby must stay synchronous
+and no write may take 2 s or more.
 
 Exit codes: 0 every step passed, 1 a step failed, 2 usage or configuration error
 USAGE
@@ -91,14 +97,20 @@ probe_writes() {
   local counts_file="${2:?counts file required}"
   local inserted=0
   local failed=0
+  local slowest=0
+  local started
+  local took
 
   while [[ "$(< "${flag_file}")" == 'go' ]]; do
+    started="${EPOCHREALTIME//[.,]/}"
     if database::bare "${PRIMARY_CONTAINER}" <<< "${SQL_PROBE_INSERT}" > /dev/null 2>&1; then
       inserted=$(( inserted + 1 ))
     else
       failed=$(( failed + 1 ))
     fi
-    printf '%s %s\n' "${inserted}" "${failed}" > "${counts_file}"
+    took=$(( (${EPOCHREALTIME//[.,]/} - started) / 1000 ))
+    (( took <= slowest )) || slowest="${took}"
+    printf '%s %s %s\n' "${inserted}" "${failed}" "${slowest}" > "${counts_file}"
     sleep "${PROBE_PAUSE_SECONDS}"
   done
 }
@@ -112,12 +124,17 @@ check_identity() {
   role="$(< "${USER_FILE_PATH}")"
   seen="$(database::bare "${PRIMARY_CONTAINER}" <<< "${SQL_STREAMING_ROLE}")"
   story::expect_equal "the standby streams as ${role} (from the file)" "${seen}" "${role}"
+  if [[ "${ROTATION_MODE}" == 'sync' ]]; then
+    seen="$(database::bare "${PRIMARY_CONTAINER}" <<< "${SQL_SYNC_STATE}")"
+    story::expect_equal 'the standby is still a synchronous standby' "${seen}" 'sync'
+  fi
 }
 
 # Step 1: start from the restored stack and create the probe's table.
 prepare_table() {
   begin_step 1 'restore the starting state and create the probe table'
   story::run_logged bash "${SCRIPT_DIR}restore-starting-state.sh"
+  story::run_logged bash "${SCRIPT_DIR}set-replication-mode.sh" --mode "${ROTATION_MODE}"
   story::run_statement "${PRIMARY_CONTAINER}" "drop table if exists ${TEST_TABLE}"
   story::run_statement "${PRIMARY_CONTAINER}" \
     "create table ${TEST_TABLE} (id bigserial primary key, written timestamptz default now())"
@@ -155,13 +172,16 @@ check_no_write_failed() {
   local counts_file="${1:?counts file required}"
   local inserted
   local failed
+  local slowest
   local position
 
   begin_step 5 'the probe has stopped: no write failed, and every row is on both nodes'
-  read -r inserted failed < "${counts_file}"
-  story::narrate "the probe wrote ${inserted} rows and ${failed} writes failed"
+  read -r inserted failed slowest < "${counts_file}"
+  story::narrate "the probe wrote ${inserted} rows, ${failed} writes failed, slowest ${slowest} ms"
   (( inserted > 0 )) || die 1 'FAIL: the probe never wrote'
   story::expect_equal 'no write failed during three rotations' "${failed}" 0
+  (( slowest < STALL_LIMIT_MS )) || die 1 "FAIL: a write took ${slowest} ms"
+  story::narrate "PASS: no write stalled: the slowest took ${slowest} ms in ${ROTATION_MODE} mode"
   position="$(database::bare "${PRIMARY_CONTAINER}" <<< "${SQL_WAL_POSITION}")"
   database::wait_for_replay "${STANDBY_CONTAINER}" "${position}"
   story::expect_query "${PRIMARY_CONTAINER}" "${SQL_ROW_COUNT}" "${inserted}"
@@ -175,6 +195,7 @@ rebuild_standby_from_nothing() {
   story::run_logged container::compose_up "${COMPOSE_FILE}" "${UP_PULL_POLICY}"
   story::run_logged bash "${SCRIPT_DIR}restore-starting-state.sh"
   check_identity > /dev/null
+  story::expect_query "${STANDBY_CONTAINER}" 'show synchronous_standby_names' ''
   story::expect_query "${STANDBY_CONTAINER}" "${SQL_ROW_COUNT}" \
     "$(database::bare "${PRIMARY_CONTAINER}" <<< "${SQL_ROW_COUNT}")"
 }
@@ -231,8 +252,9 @@ run_and_restore() {
     outcome='failed'
   fi
   printf 'stop' > "${flag_file}"
-  story::narrate '== Cleanup: restore the starting state =='
+  story::narrate '== Cleanup: restore the starting state, in asynchronous mode =='
   story::run_logged bash "${SCRIPT_DIR}restore-starting-state.sh"
+  story::run_logged bash "${SCRIPT_DIR}set-replication-mode.sh" --mode async
   story::run_statement "${PRIMARY_CONTAINER}" "drop table if exists ${TEST_TABLE}"
   [[ "${outcome}" == 'passed' ]] || die 1 'the experiment failed (the starting state was restored)'
 }
@@ -262,6 +284,8 @@ main() {
 
   (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
   require_commands cat mktemp sleep
+  [[ "${ROTATION_MODE}" == 'async' || "${ROTATION_MODE}" == 'sync' ]] ||
+    die 2 'ROTATION_MODE is async or sync'
   run_and_restore
 }
 

@@ -214,7 +214,7 @@ caused a 9.2 s stall. A light, single-writer probe does not show how long a real
 | SEC-05 | **Edits that replace the file** | An in-place write reached the container. An editor that saves by creating a new file changes the inode and may not. Always compare checksums, as in the runbook. Recreating a container to pick up a secret restarts that node |
 | SEC-06 | **Application clients** | The platform's services will have their own database role. They need the same overlap (two roles, or a connection pool that re-authenticates), and a test that rotates under load |
 | SEC-07 | **Very long windows and heavy load** | Not measured |
-| SEC-08 | **The in-place file write is not atomic** | `cat new > file` truncates then writes, so a container could read an empty file for a moment. `rotate-secret.sh` refuses to start while a rebuild is pending or the standby is not streaming, but nothing stops a rebuild starting during a rotation. Next step: a lock |
+| SEC-08 | **The in-place file write is not atomic: closed 2026-11-21 by a maintenance lock** | `cat new > file` truncates then writes, so a container could read an empty file for a moment. Rotation, rebuild and role-change scripts now take one maintenance lock (lib/lock.sh): a second run is refused while the first lives, a child script of the holder re-enters, and a lock left by a run that ended is taken over. `test-maintenance-lock.sh` proves it. The standby entrypoint's first-start bootstrap is not covered by the lock |
 
 ## Related
 

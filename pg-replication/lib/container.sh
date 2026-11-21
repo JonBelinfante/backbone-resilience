@@ -5,7 +5,9 @@
 # Exit codes: none (the functions return, or call die of the script that imported them)
 
 readonly CONTAINER_NAME_PATTERN='^[A-Za-z0-9][A-Za-z0-9_.-]*$'
-readonly CONTAINER_MARK_KEEP="sed -e '/^primary_conninfo/d' -e '/^primary_slot_name/d'"
+readonly CONTAINER_MARK_DROP="-e '/^primary_conninfo/d' -e '/^primary_slot_name/d'"
+readonly CONTAINER_MARK_SYNC="-e '/^synchronous_standby_names/d'"
+readonly CONTAINER_MARK_KEEP="sed ${CONTAINER_MARK_DROP} ${CONTAINER_MARK_SYNC}"
 readonly CONTAINER_MARK_FILTER="${CONTAINER_MARK_KEEP} postgresql.auto.conf > postgresql.auto.new"
 readonly CONTAINER_MARK_START='umask 077 && touch postgresql.auto.conf'
 readonly CONTAINER_MARK_PROGRAM="${CONTAINER_MARK_START} && ${CONTAINER_MARK_FILTER}"
@@ -313,7 +315,9 @@ container::standby_settings() {
   printf "primary_slot_name = '%s'\n" "${slot}"
 }
 
-# Mark the target's data directory as a standby of the source. The two settings replace any
+# Mark the target's data directory as a standby of the source. A standby never names its own
+# synchronous standby (that belongs to the writer, and would block its writes after promotion).
+# The two connection settings replace any
 # copies that pg_rewind or pg_basebackup brought over (an appended line would leave the old
 # password in the file), and the file is replaced in one step so a killed run cannot half-write it.
 # Usage: container::mark_standby TARGET_CONTAINER SOURCE_CONTAINER CONNINFO SLOT

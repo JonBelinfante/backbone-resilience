@@ -38,6 +38,8 @@ source "${SCRIPT_DIR}runtime.sh"
 source "${SCRIPT_DIR}../lib/container.sh"
 # shellcheck source=../lib/database.sh
 source "${SCRIPT_DIR}../lib/database.sh"
+# shellcheck source=../lib/lock.sh
+source "${SCRIPT_DIR}../lib/lock.sh"
 
 # Print how to run this script.
 usage() {
@@ -272,6 +274,7 @@ main() {
 
   (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
   require_commands bash cat rm sleep touch
+  lock::acquire "${REBUILD_MARKER_DIR}" "${SCRIPT_NAME}"
   log INFO "DECISION: rebuilding ${PRIMARY_CONTAINER} as a standby of ${STANDBY_CONTAINER}"
   prepare_rebuild
   rebuild_data_directory "$(choose_method "${requested}")"
