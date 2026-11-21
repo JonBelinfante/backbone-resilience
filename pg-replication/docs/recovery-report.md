@@ -1,6 +1,6 @@
 # Recovery measurements: RPO and RTO
 
-Written by write-recovery-report.sh on 2026-11-21 13:19:44 UTC, at commit 4e33ae9.
+Written by write-recovery-report.sh on 2026-11-21 14:01:17 UTC, at commit 539f8d4 plus uncommitted changes.
 PostgreSQL 16.16 (Debian 16.16-1.pgdg13+1), two nodes in Docker Compose on one machine.
 A write about every 100 ms. RTO target: 30 s beyond the decision delay.
 This file is overwritten by every run.
@@ -20,6 +20,10 @@ as the client sees it. A write that failed but is present is in doubt, not lost.
 | async | 3 | the lag shows up as loss (lag 0: recorded only) | PASS (most lost in a trial: 18) |
 | sync | 3 | **no acknowledged write lost** | PASS |
 | control | 3 | loss reappears at commit level local | PASS (most lost in a trial: 17) |
+| standby-crash | 3 | the standby catches up; no write fails | PASS |
+| primary-restart | 3 | restart within the target; nothing lost; indexes intact | PASS |
+| midtx | 3 | uncommitted rows gone, committed rows kept; indexes intact | PASS |
+| checkpoint | 3 | the crash lands in a checkpoint; nothing lost; indexes intact | PASS |
 
 ## RTO: how long the client could not write
 
@@ -42,6 +46,17 @@ The outage includes the decision delay: subtract it to get the system time.
 
 Under sync the outage is the time writes were blocked while the standby was cut off:
 the price of RPO 0.
+
+## Crash matrix: a node killed and restarted, no failover
+
+| Case | Down (s) | Trials | Lost | Failed writes | Outage ms (min / median / max) | Index damage | Uncommitted rows kept | Committed rows missing | Crashes inside a checkpoint |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| standby-crash | 3 | 3 | 0 | 0 | 0 / 0 / 0 | 0 | 0 | 0 | n/a |
+| primary-restart | 3 | 3 | 0 | 32 | 3397 / 3439 / 3500 | 0 | 0 | 0 | n/a |
+| midtx | 3 | 3 | 0 | 32 | 3456 / 3490 / 3538 | 0 | 0 | 0 | n/a |
+| checkpoint | 3 | 3 | 0 | 40 | 3614 / 3794 / 4419 | 0 | 0 | 0 | 3 of 3 |
+
+Each figure is the worst over the trials. Index damage is from amcheck.
 
 ## Every trial
 
@@ -68,6 +83,18 @@ the price of RPO 0.
 | control | 3 | 50 | 17 | 0 | 317 |
 | control | 3 | 51 | 17 | 0 | 317 |
 | control | 3 | 51 | 17 | 0 | 330 |
+| standby-crash | 3 | 62 | 0 | 0 | 0 |
+| standby-crash | 3 | 63 | 0 | 0 | 0 |
+| standby-crash | 3 | 63 | 0 | 0 | 0 |
+| primary-restart | 3 | 43 | 0 | 0 | 3500 |
+| primary-restart | 3 | 44 | 0 | 0 | 3439 |
+| primary-restart | 3 | 43 | 0 | 0 | 3397 |
+| midtx | 3 | 50 | 0 | 0 | 3538 |
+| midtx | 3 | 51 | 0 | 0 | 3490 |
+| midtx | 3 | 50 | 0 | 0 | 3456 |
+| checkpoint | 3 | 50 | 0 | 0 | 4419 |
+| checkpoint | 3 | 54 | 0 | 0 | 3614 |
+| checkpoint | 3 | 57 | 0 | 0 | 3794 |
 
 ## Limits
 
@@ -77,6 +104,7 @@ the price of RPO 0.
 - RTO is the time until a write succeeds somewhere, seen through the Docker host.
   There is no router or client library, and promotion is a script, not a controller.
 - About 10 writes a second: loss is counted in tens of writes, not thousands.
+- The crash matrix kills the container (SIGKILL); a power cut is not tested.
 - Where a case has no target the number is recorded only.
 
 Reproduce: bash scripts/measure-recovery.sh (its --help lists the settings).

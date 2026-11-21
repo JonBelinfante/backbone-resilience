@@ -1,7 +1,7 @@
 # Capability register: Phase 1 (two Postgres nodes, WAL streaming)
 
 What this experiment has **proved**, with the evidence for each claim, and what it has **not**. A capability is listed
-as proven only if it has been run and the result observed. Last evidence run: **2026-11-21** (sections 7 and 8); hard-kill evidence **2026-11-20** (section 6); earlier evidence **2026-11-14**.
+as proven only if it has been run and the result observed. Last evidence run: **2026-11-21** (sections 7 to 9); hard-kill evidence **2026-11-20** (section 6); earlier evidence **2026-11-14**.
 One machine (Docker Compose, macOS), PostgreSQL 16, two nodes `pg-primary` and `pg-standby`.
 
 **Status legend**
@@ -18,10 +18,10 @@ Re-run the fast checks: `bash scripts/run-all-checks.sh` (lint of all 31 shell f
 The experiments change the databases and are slower, so they are separate runners, each one PASS or FAIL, each restoring the starting state:
 `test-hard-kill.sh --target roundtrip|restore|rotate` (minutes), `test-divergence-rewind.sh` (about 20 s), `test-replica-lag.sh` (about 35 s),
 `test-slot-limit.sh` (about 2.5 minutes, writes 1.5 GB of WAL, needs 6 GB free), `test-rotation.sh` (about 16 s) and
-`measure-recovery.sh` (RPO and RTO, 21 trials of about 30 s, about 13 minutes; it writes [docs/recovery-report.md](docs/recovery-report.md)).
+`measure-recovery.sh` (RPO and RTO, 21 trials of about 30 s, about 13 minutes; `--scenarios crash-matrix` adds 12 trials, about 10 minutes; it writes [docs/recovery-report.md](docs/recovery-report.md)).
 
 Closed gaps keep their numbers out of section 4. Where each went: GAP-01 to RPO-01, GAP-02 to RPO-02, GAP-04 to FOV-09,
-GAP-05 to RTO-01, GAP-08 to DEC-01, GAP-09 to OPS-04, GAP-13 to SEC-R2, GAP-14 to SEC-R3.
+GAP-05 to RTO-01, GAP-06 to CRS-01, GAP-08 to DEC-01, GAP-09 to OPS-04, GAP-13 to SEC-R2, GAP-14 to SEC-R3.
 
 ## 1. Replication
 
@@ -51,6 +51,7 @@ GAP-05 to RTO-01, GAP-08 to DEC-01, GAP-09 to OPS-04, GAP-13 to SEC-R2, GAP-14 t
 | RPO-01 | **Observed RPO under asynchronous replication.** Acknowledged writes missing on the node that took over, as a function of how far behind the standby was | **Proven (auto)**: `measure-recovery.sh` | 2026-11-21, 3 trials per lag, the standby isolated from the network for the lag, then the writer crashed (SIGKILL) and the standby promoted at once. Lost writes: lag 0 s **0, 0, 0** (of about 35 acknowledged); lag 1 s **6, 6, 6** (of about 42); lag 3 s **17, 17, 18** (of about 53). Loss grows with lag at about 6 writes per second, which is the write rate, and none was in doubt. Full tables: [docs/recovery-report.md](docs/recovery-report.md) | The lag is a partition, so it is all-or-nothing; gradual latency needs a network fault tool (GAP-11). At natural lag on localhost 3 trials lost nothing: that says loss is rare there, not that it cannot happen. About 10 writes a second only (GAP-10) |
 | RPO-02 | **Zero acknowledged-write loss under synchronous replication, and a control that proves the test can see loss** | **Proven (auto)**: `measure-recovery.sh` | 2026-11-21, 3 trials, standby isolated for 3 s then writer crashed: sync lost **0, 0, 0**. The control (the same with commit level local) lost **17, 17, 17**, so the test detects loss. **The price of zero loss:** writes were blocked while the standby was cut off, an outage of **3.4, 3.6 and 3.7 s**, against about 0.3 s without sync | Trials are few (3) and the writer, not the standby, crashes. A standby that crashes under sync blocks writes (REP-05); a quorum of more than one standby is not tested |
 | RTO-01 | **Observed RTO for a failover, from the client's view.** First failed write to first success, with promotion by script and no decision delay | **Proven (auto)**: `measure-recovery.sh` | 2026-11-21, 3 trials each: clean stop then promote **369 / 374 / 482 ms** (min / median / max); crash then promote **312 / 499 / 726 ms**. Median share of the monthly budget at 99.999% (26 s): 1.4% and 1.9%. The prober's own write interval is about 100 ms of that. Targets are enforced (outage within 30 s beyond the decision delay) | The number is the script's speed. A person or a detector deciding to promote adds the decision delay (a setting, 0 here), which is the real cost until GAP-07 exists. Measured through the Docker host, not a router. Recovery of the stack afterwards (about 10 s to 70 s) is not part of the RTO |
+| CRS-01 | **Crash recovery is correct for a database node killed (SIGKILL) under write load**: the standby, the writer restarted in place, the writer in the middle of an uncommitted transaction, and the writer during a checkpoint. A writer crash followed by failover and rejoin is covered by RPO-01, RPO-02 and RTO-01 | **Proven (auto)**: `measure-recovery.sh --scenarios crash-matrix` | 2026-11-21, 3 trials per case, a node down 3 s under a write probe. **Standby killed:** 62 to 63 writes acknowledged, **0 failed** (the writer is unaffected under async), the standby restarted, caught up from its slot and held every acknowledged write. **Writer killed and restarted:** 0 acknowledged writes lost, 0 index damage (amcheck), outage 3.4 to 3.5 s for 3 s of downtime, so crash recovery itself took about 0.4 to 0.5 s. **Writer killed in an uncommitted transaction of 50,000 rows:** 0 uncommitted rows survived, all 1,000 committed rows kept, outage 3.5 s. **Writer killed during a checkpoint** (1.5 million committed rows; the Postgres log confirms the checkpoint had started and not finished in **3 of 3** trials): 0 lost, 0 index damage, all committed rows present, outage 3.6 to 4.4 s. Tables: [docs/recovery-report.md](docs/recovery-report.md) | A process crash, not a power cut: the host keeps its page cache, so this does not test fsync behaviour. amcheck checks B-tree indexes, not heap pages. Small data sets; 3 trials. A standby crash under **sync** blocks writes (REP-05) and is not in this matrix. A second failure during recovery is not tested |
 
 ## 3. Operations, observability and engineering controls
 
@@ -76,7 +77,6 @@ GAP-05 to RTO-01, GAP-08 to DEC-01, GAP-09 to OPS-04, GAP-13 to SEC-R2, GAP-14 t
 | ID | Gap | Why it matters | What would prove it |
 |---|---|---|---|
 | GAP-03 | **Fencing**: nothing stops a returning old primary except our own script (the guard is bypassed by a plain `docker start` or a direct `pg_promote`) | Real split-brain protection needs an epoch or token | **M4 (Phase 2).** First a failing test: after a failover, `docker start` the old primary and write to it (today this succeeds). Then an epoch and lease with a Docker-level fence before promotion. Tests: the old primary cannot write after a direct start; a partitioned but running old primary stops writing within the lease time; no write is acknowledged under the old epoch after the new one began. Limit to state: a shared-volume lease is itself a single point of failure |
-| GAP-06 | **Crash failures of Postgres itself**: scripts have been hard-killed (FOV-08) and the writer has been SIGKILLed under write load 21 times (RPO-01, RPO-02, RTO-01), but the rest of the crash matrix is not done. **Found already:** a crashed node cannot be rewound (its stale postmaster.pid makes pg_rewind's crash recovery fail), so the rebuild falls back to a clone | `kill`, power loss and a crash during a transaction behave differently | **M2.** The remaining cases, each ending with the ledger check and a restore: kill the standby under load (it must catch up from the slot); crash mid-transaction; crash during a checkpoint; crash then failover then rejoin. Limit to state: `docker kill` is a process crash, not a power cut |
 | GAP-07 | **Automatic failure detection and failover** | Today a person decides and runs the script | **M4 (Phase 2).** A controller that probes several times, fences, then promotes. Experiments: crash the writer (time to detect and promote, 0 loss under sync); a pause shorter than the threshold must **not** fail over; partition the controller from the writer only (no promotion unless fenced); kill the controller (the data plane keeps serving); kill it mid-promotion (reuse the hard-kill harness) |
 | GAP-10 | **Behaviour under load and concurrency** | All tests are single writers, a probe at about 10 writes a second at most | **M3.** `pgbench` custom scripts (in the postgres image): many clients, an idempotency-key table with `ON CONFLICT DO NOTHING` and keys drawn from a small range so duplicates collide; run a failover during it. Pass: no duplicate keys, conserved totals; record throughput and p99 before, during and after. Proves database-level idempotency, not the application's (GAP-12) |
 | GAP-11 | **Network faults** (latency, partitions, packet loss) | Only process stops are tested | **M3.** Toxiproxy on the replication link (compose service; the replication host becomes a setting). Latency 50, 200, 1000 ms (async: replay lag grows; sync: commit latency equals the added latency); partition under sync (how long writes block, what ends it); client-to-writer partition (the false-failover trap for GAP-07); reset and timeout faults (time for the WAL receiver to notice) |
@@ -90,7 +90,7 @@ The gaps depend on each other. The service language is decided: **all Python** (
 
 | Gap or item | Needs first | Language |
 |---|---|---|
-| GAP-06 rest of the crash matrix | nothing (the prober and fault library exist) | Bash |
+| GAP-06 rest of the crash matrix: **done, CRS-01** | nothing (the prober and fault library exist) | Bash |
 | SEC-08 rotation lock, and rotation under sync as a test | nothing | Bash |
 | GAP-10 load, database level (`pgbench`) | nothing | Bash |
 | GAP-11 network faults (Toxiproxy) | nothing | Bash, compose |
@@ -186,3 +186,22 @@ Method: `measure-recovery.sh` runs `run-recovery-trial.sh` for each case. A prob
 | Feasibility probe | Isolating the standby with `docker network disconnect` injects controlled lag with no extra tool, so RPO versus lag is measurable before a network fault tool exists | used for the RPO cases; a plan item for GAP-11 is no longer a prerequisite |
 | A crash trial | `pg_rewind` of a node that was SIGKILLed fails ("lock file postmaster.pid already exists" in its crash-recovery step), so a crashed old primary cannot be rewound as it is | `promote-primary-to-standby.sh` now falls back to a clone when `pg_rewind` fails; a restore from a crash recovers in one call |
 | The sync trials | Zero loss is bought with blocked writes: an outage as long as the isolation (3.4 to 3.7 s for a 3 s lag) | recorded as the price in RPO-02 |
+
+## 9. Evidence log, 2026-11-21 (milestone M2: the crash matrix)
+
+Method: the same trials as section 8 (`run-recovery-trial.sh`, with a write prober and a ledger), with four scenarios that kill a node and restart it, with no failover. After each, `report-ledger.sh` compares the ledger with the node that holds the data, and `amcheck` checks the B-tree indexes. 12 trials, all completed, every target met. Every trial is in [docs/recovery-results.txt](docs/recovery-results.txt).
+
+| Case | Trials | Acknowledged | Lost | Failed writes | Outage (ms) | Index damage | Other check |
+|---|---|---|---|---|---|---|---|
+| standby killed | 3 | 62 / 63 / 63 | 0, 0, 0 | 0, 0, 0 | 0 | 0 | caught up from its slot |
+| writer killed and restarted | 3 | 43 / 43 / 44 | 0, 0, 0 | 32 | 3397 / 3439 / 3500 | 0 | none |
+| writer killed in a transaction | 3 | 50 / 50 / 51 | 0, 0, 0 | 32 | 3456 / 3490 / 3538 | 0 | 0 uncommitted rows kept, 1,000 of 1,000 committed kept |
+| writer killed in a checkpoint | 3 | 50 / 54 / 57 | 0, 0, 0 | 34 to 40 | 3614 / 3794 / 4419 | 0 | crash inside a checkpoint in 3 of 3; 1,500,000 of 1,500,000 committed kept |
+
+**Findings.**
+
+| Found by | Finding | Result |
+|---|---|---|
+| The checkpoint case, first version | It passed, but the Postgres log showed the checkpoint had finished in 41 ms, before the kill 150 ms later: the case had not tested a crash during a checkpoint | the case now dirties 1.5 million rows and kills at 0.1 s; the trial reads the log and records whether the last crash recovery followed an unfinished checkpoint; the verdict fails if no trial hit one |
+| The mid-transaction case | A crash-in-a-transaction case needs proof the transaction was open | the trial checks `pg_stat_activity` for the open transaction just before the kill and stops if it is not there |
+| All four | Crash recovery on a node with this much data is fast: about 0.4 to 0.5 s of the 3.4 to 3.5 s outage was recovery, the rest was the 3 s the node was kept down | recorded; the restart outage is judged against the downtime plus the RTO target |

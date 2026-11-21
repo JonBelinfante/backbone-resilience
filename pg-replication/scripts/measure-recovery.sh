@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Run failure trials to measure RPO and RTO, save the results, and write the report.
 # Usage: measure-recovery.sh [-h | --help] [--scenarios LIST] [--results FILE]
-# Requires: bash cat
+# Requires: bash cat mktemp
 # Exit codes: 0 every target met, 1 a target missed or a trial failed, 2 usage or setup error
 
 set -Eeuo pipefail
@@ -16,11 +16,14 @@ shopt -s inherit_errexit
 
 # Environment: MEASURE_TRIALS is the number of trials per case; MEASURE_LAGS the seconds of lag
 # for the asynchronous cases (comma separated); MEASURE_SYNC_LAG the lag for the sync and control
-# cases. DECISION_DELAY (seconds between the failure and the promotion) and RTO_TARGET_SECONDS are
+# cases; MEASURE_DOWN_SECONDS the seconds a crashed node stays down in the crash-matrix cases.
+# DECISION_DELAY (seconds between the failure and the promotion) and RTO_TARGET_SECONDS are
 # read by the trial and the report; set them in the environment to change them.
 readonly MEASURE_TRIALS="${MEASURE_TRIALS:-3}"
 readonly MEASURE_LAGS="${MEASURE_LAGS:-0,1,3}"
 readonly MEASURE_SYNC_LAG="${MEASURE_SYNC_LAG:-3}"
+readonly MEASURE_DOWN_SECONDS="${MEASURE_DOWN_SECONDS:-3}"
+readonly TEMP_DIR="${TEMP_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
@@ -31,6 +34,8 @@ readonly DEFAULT_SCENARIOS='stop,crash,async,sync,control'
 
 # shellcheck source=./runtime.sh
 source "${SCRIPT_DIR}runtime.sh"
+# shellcheck source=../lib/measure.sh
+source "${SCRIPT_DIR}../lib/measure.sh"
 
 # Print how to run this script.
 usage() {
@@ -45,9 +50,12 @@ Scenarios, comma separated, default stop,crash,async,sync,control:
   async         the standby isolated for MEASURE_LAGS seconds, then a crash: the RPO under async
   sync          the same under synchronous replication: no acknowledged write may be lost
   control       sync at commit level local: the loss must come back (the control for sync)
+  crash-matrix  standby-crash, primary-restart, midtx, checkpoint: crash recovery, no failover
+Results of the scenarios run replace their old lines in FILE; the others are kept.
 Each trial takes about 30 seconds and changes the databases: use only the throwaway stack.
 
-Environment: MEASURE_TRIALS (3), MEASURE_LAGS (0,1,3), MEASURE_SYNC_LAG (3), DECISION_DELAY (0),
+Environment: MEASURE_TRIALS (3), MEASURE_LAGS (0,1,3), MEASURE_SYNC_LAG (3),
+MEASURE_DOWN_SECONDS (3), DECISION_DELAY (0),
 RTO_TARGET_SECONDS (30), RUN_LOG_DIR.
 
 Exit codes: 0 every target met, 1 a target missed or a trial failed, 2 usage or configuration error
@@ -59,6 +67,7 @@ check_environment() {
   log INFO 'checking the settings'
   require_integer MEASURE_TRIALS "${MEASURE_TRIALS}"
   require_integer MEASURE_SYNC_LAG "${MEASURE_SYNC_LAG}"
+  require_integer MEASURE_DOWN_SECONDS "${MEASURE_DOWN_SECONDS}"
 }
 
 # Print the lags, one per line, that a scenario is run with.
@@ -76,6 +85,9 @@ lags_for() {
       ;;
     sync | control)
       printf '%s\n' "${MEASURE_SYNC_LAG}"
+      ;;
+    standby-crash | primary-restart | midtx | checkpoint)
+      printf '%s\n' "${MEASURE_DOWN_SECONDS}"
       ;;
     *)
       die 2 "unknown scenario: ${scenario}"
@@ -149,8 +161,15 @@ measure_and_report() {
   log INFO 'measuring and reporting'
   local scenarios="${1:?scenarios required}"
   local results="${2:?results file required}"
+  local kept
 
-  printf '' > "${results}"
+  scenarios="${scenarios//crash-matrix/standby-crash,primary-restart,midtx,checkpoint}"
+  kept="$(mktemp "${TEMP_DIR}/${SCRIPT_NAME}-kept.XXXXXX")"
+  CLEANUP_PATHS+=("${kept}")
+  if [[ -r "${results}" ]]; then
+    measure::keep_other_results "${results}" "${scenarios}" > "${kept}"
+  fi
+  cat -- "${kept}" > "${results}"
   run_scenarios "${scenarios}" "${results}"
   bash "${SCRIPT_DIR}write-recovery-report.sh" --results "${results}"
 }
@@ -192,7 +211,7 @@ main() {
 
   (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
   check_environment
-  require_commands bash cat
+  require_commands bash cat mktemp
   measure_and_report "${scenarios}" "${results}"
 }
 

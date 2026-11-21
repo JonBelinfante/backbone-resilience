@@ -1,11 +1,16 @@
 # script-kind: library
 # Purpose: Inject faults into the database containers, so an experiment can cause a failure.
 # Usage: source "${SCRIPT_DIR}../lib/fault.sh", then call fault::stop_streaming and the others
-# Requires: none
+# Requires: sleep
 # Depends: container database
 # Exit codes: none (the functions return, or call die of the script that imported them)
 
 readonly FAULT_INTEGER_PATTERN='^[0-9]+$'
+readonly FAULT_RESTART_ATTEMPTS=60
+readonly FAULT_RESTART_PAUSE_SECONDS=1
+readonly FAULT_CHECKPOINT_KILL_SECONDS=0.1
+readonly FAULT_OPEN_SQL="select count(*) from pg_stat_activity where state = 'active'"
+readonly FAULT_OPEN_FILTER=" and query like '%pg_sleep(120)%' and pid <> pg_backend_pid()"
 readonly FAULT_RESET_DELAY_SQL='alter system reset recovery_min_apply_delay'
 readonly FAULT_RELOAD_SQL='select pg_reload_conf()'
 readonly FAULT_STOP_STREAMING_SQL="alter system set primary_conninfo = ''; select pg_reload_conf()"
@@ -111,4 +116,68 @@ fault::set_commit_level() {
       ;;
   esac
   database::run "${container}" <<< "${sql}" > /dev/null
+}
+
+# Crash a node, leave it down for some seconds, then start it again and wait until it is healthy.
+# The node recovers from its own log: this is crash recovery, with no failover.
+# Usage: fault::crash_and_restart CONTAINER DOWN_SECONDS
+fault::crash_and_restart() {
+  local container="${1:?container required}"
+  local seconds="${2:?seconds required}"
+
+  [[ "${seconds}" =~ ${FAULT_INTEGER_PATTERN} ]] || die 2 "not whole seconds: ${seconds}"
+  fault::crash_node "${container}"
+  sleep "${seconds}"
+  log INFO "CHANGE: restarting ${container} after the crash"
+  container::start "${container}"
+  container::wait_healthy "${container}" \
+    "${FAULT_RESTART_ATTEMPTS}" \
+    "${FAULT_RESTART_PAUSE_SECONDS}"
+}
+
+# Commit some rows, open a large transaction that is never committed, crash the node in the
+# middle of it and restart it. The table crash_probe(id, note) must exist.
+# Usage: fault::crash_in_transaction CONTAINER DOWN_SECONDS COMMITTED_ROWS
+fault::crash_in_transaction() {
+  local container="${1:?container required}"
+  local seconds="${2:?seconds required}"
+  local committed="${3:?committed rows required}"
+  local sql
+  local pid
+  local open
+
+  [[ "${committed}" =~ ${FAULT_INTEGER_PATTERN} ]] || die 2 "not a whole number: ${committed}"
+  sql="insert into crash_probe select g, 'committed' from generate_series(1, ${committed}) g"
+  database::run "${container}" <<< "${sql}" > /dev/null
+  sql="begin; insert into crash_probe select g + 1000000, 'uncommitted'"
+  sql+=' from generate_series(1, 50000) g; select pg_sleep(120)'
+  log INFO "CHANGE: ${container} holds an uncommitted transaction of 50000 rows"
+  database::run "${container}" <<< "${sql}" > /dev/null 2>&1 &
+  pid=$!
+  sleep 1
+  open="$(database::bare "${container}" <<< "${FAULT_OPEN_SQL}${FAULT_OPEN_FILTER}")"
+  [[ "${open}" == '1' ]] || die 1 "the uncommitted transaction is not open (${open} found)"
+  fault::crash_and_restart "${container}" "${seconds}"
+  wait "${pid}" || log INFO 'the open transaction ended with the crash'
+}
+
+# Commit many rows so a checkpoint has a lot to write, start a checkpoint, crash the node a
+# moment later (during it) and restart it. The table crash_probe(id, note) must exist.
+# Usage: fault::crash_in_checkpoint CONTAINER DOWN_SECONDS COMMITTED_ROWS
+fault::crash_in_checkpoint() {
+  local container="${1:?container required}"
+  local seconds="${2:?seconds required}"
+  local committed="${3:?committed rows required}"
+  local sql
+  local pid
+
+  [[ "${committed}" =~ ${FAULT_INTEGER_PATTERN} ]] || die 2 "not a whole number: ${committed}"
+  sql="insert into crash_probe select g, 'committed' from generate_series(1, ${committed}) g"
+  database::run "${container}" <<< "${sql}" > /dev/null
+  log INFO "CHANGE: ${container} starts a checkpoint"
+  database::bare "${container}" <<< 'checkpoint' > /dev/null 2>&1 &
+  pid=$!
+  sleep "${FAULT_CHECKPOINT_KILL_SECONDS}"
+  fault::crash_and_restart "${container}" "${seconds}"
+  wait "${pid}" || log INFO 'the checkpoint ended with the crash'
 }

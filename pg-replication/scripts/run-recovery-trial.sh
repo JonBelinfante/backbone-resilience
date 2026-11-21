@@ -30,6 +30,13 @@ readonly WARMUP_SECONDS=3
 readonly RECOVERY_SECONDS=3
 readonly SQL_DROP='drop table if exists probe_ledger'
 readonly SQL_CREATE='create table probe_ledger(seq bigint primary key)'
+readonly SQL_CRASH_DROP='drop table if exists crash_probe'
+readonly SQL_CRASH_CREATE='create table crash_probe(id int primary key, note text)'
+readonly SQL_EXTENSION='create extension if not exists amcheck'
+readonly SQL_UNCOMMITTED="select count(*) from crash_probe where note = 'uncommitted'"
+readonly SQL_COMMITTED="select count(*) from crash_probe where note = 'committed'"
+readonly MIDTX_ROWS=1000
+readonly CHECKPOINT_ROWS=1500000
 
 # shellcheck source=./runtime.sh
 source "${SCRIPT_DIR}runtime.sh"
@@ -46,16 +53,14 @@ usage() {
 Usage: run-recovery-trial.sh [-h | --help] --scenario NAME [--lag SECONDS]
 
 Run one trial from a restored stack with run-write-prober.sh writing throughout, then print one
-line, RESULT followed by name=value pairs: the scenario, then the figures of report-ledger.sh.
-  --scenario stop     stop the writer cleanly, then promote the standby
-             crash    kill the writer (SIGKILL), then promote the standby
-             async    isolate the standby for --lag seconds, kill the writer, promote
-             sync     the same with synchronous replication (no acked write may be lost)
-             control  sync with commit level local: the loss must come back (the control)
-  --lag SECONDS       how long the standby is isolated before the crash (default 0)
-The seconds between the failure and the promotion are DECISION_DELAY (default 0).
-Pass or fail, it then reconnects the standby, restores the starting state, asynchronous mode and
-the default commit level. The trial changes the databases: use it only on the throwaway stack.
+line, RESULT followed by name=value pairs. Scenarios, with --lag the seconds of isolation (the
+first five) or of downtime (the last four); DECISION_DELAY is the wait before promotion:
+  stop, crash          stop or kill the writer, then promote the standby
+  async, sync, control isolate the standby, kill the writer, promote (control: sync, commit local)
+  standby-crash        kill the standby under load and restart it: it must catch up
+  primary-restart      kill the writer and restart the same node: crash recovery
+  midtx, checkpoint    kill the writer in an uncommitted transaction, or during a checkpoint
+It then reconnects the standby and restores the stack. Use it only on the throwaway stack.
 
 Environment: PRIMARY_CONTAINER, STANDBY_CONTAINER, DECISION_DELAY, TEMP_DIR, RUN_LOG_DIR.
 
@@ -69,6 +74,7 @@ prepare_stack() {
   log INFO 'preparing the stack'
   local scenario="${1:?scenario required}"
   local mode='async'
+  local sql
 
   bash "${SCRIPT_DIR}restore-starting-state.sh" > /dev/null
   if [[ "${scenario}" == 'sync' || "${scenario}" == 'control' ]]; then
@@ -79,12 +85,37 @@ prepare_stack() {
     fault::set_commit_level "${PRIMARY_CONTAINER}" local
   fi
   database::run "${PRIMARY_CONTAINER}" <<< "${SQL_DROP}; ${SQL_CREATE}" > /dev/null
+  sql="${SQL_EXTENSION}; ${SQL_CRASH_DROP}; ${SQL_CRASH_CREATE}"
+  database::run "${PRIMARY_CONTAINER}" <<< "${sql}" > /dev/null
+}
+
+# Crash a node and restart it, with no failover: the four crash-matrix scenarios.
+# Usage: crash_and_recover SCENARIO LAG
+crash_and_recover() {
+  log INFO 'crashing a node and letting it recover'
+  local scenario="${1:?scenario required}"
+  local lag="${2:?lag required}"
+
+  case "${scenario}" in
+    standby-crash)
+      fault::crash_and_restart "${STANDBY_CONTAINER}" "${lag}"
+      ;;
+    primary-restart)
+      fault::crash_and_restart "${PRIMARY_CONTAINER}" "${lag}"
+      ;;
+    midtx)
+      fault::crash_in_transaction "${PRIMARY_CONTAINER}" "${lag}" "${MIDTX_ROWS}"
+      ;;
+    *)
+      fault::crash_in_checkpoint "${PRIMARY_CONTAINER}" "${lag}" "${CHECKPOINT_ROWS}"
+      ;;
+  esac
 }
 
 # Cause the failure the scenario names, wait out the decision delay, and promote the standby.
-# Usage: inject_fault SCENARIO LAG
-inject_fault() {
-  log INFO 'injecting the fault'
+# Usage: fail_over SCENARIO LAG
+fail_over() {
+  log INFO 'causing a failure and promoting the standby'
   local scenario="${1:?scenario required}"
   local lag="${2:?lag required}"
 
@@ -107,8 +138,122 @@ inject_fault() {
   bash "${SCRIPT_DIR}promote-standby-to-primary.sh" > /dev/null
 }
 
-# Run the trial: probe writes, cause the failure, keep probing, stop, and report against the
-# node that took over. The work folder holds the ledger, the stop file and the result.
+# Cause the failure the scenario names.
+# Usage: inject_fault SCENARIO LAG
+inject_fault() {
+  log INFO 'injecting the fault'
+  local scenario="${1:?scenario required}"
+  local lag="${2:?lag required}"
+
+  case "${scenario}" in
+    standby-crash | primary-restart | midtx | checkpoint)
+      crash_and_recover "${scenario}" "${lag}"
+      ;;
+    *)
+      fail_over "${scenario}" "${lag}"
+      ;;
+  esac
+}
+
+# Print 1 if the last crash recovery in a node's log followed a checkpoint that had started and
+# not finished, otherwise 0. The log is read line by line: a checkpoint opens at "checkpoint
+# starting" and closes at "checkpoint complete"; crash recovery starts at "not properly shut down".
+# Usage: checkpoint_interrupted NODE
+checkpoint_interrupted() {
+  log INFO 'looking for an interrupted checkpoint in the log'
+  local node="${1:?node required}"
+  local logs
+  local line
+  local open=0
+  local interrupted=0
+
+  logs="$(container::logs "${node}" 2>&1)"
+  while IFS= read -r line; do
+    case "${line}" in
+      *'checkpoint starting'*)
+        open=1
+        ;;
+      *'checkpoint complete'*)
+        open=0
+        ;;
+      *'not properly shut down'*)
+        interrupted="${open}"
+        open=0
+        ;;
+      *)
+        continue
+        ;;
+    esac
+  done <<< "${logs}"
+  printf '%d\n' "${interrupted}"
+}
+
+# Print figures about the data on a node after a crash: index checks that failed (amcheck),
+# rows of the never-committed transaction that survived, and committed rows that are missing.
+# Usage: verify_data NODE EXPECTED_COMMITTED
+verify_data() {
+  log INFO 'verifying the data after the crash'
+  local node="${1:?node required}"
+  local expected="${2:?expected rows required}"
+  local index
+  local sql
+  local failures=0
+  local committed
+
+  for index in probe_ledger_pkey crash_probe_pkey; do
+    sql="select bt_index_check('${index}'::regclass)"
+    if ! database::bare "${node}" <<< "${sql}" > /dev/null 2>&1; then
+      failures=$(( failures + 1 ))
+    fi
+  done
+  committed="$(database::bare "${node}" <<< "${SQL_COMMITTED}")"
+  printf 'index_failures=%d\n' "${failures}"
+  printf 'uncommitted=%s\n' "$(database::bare "${node}" <<< "${SQL_UNCOMMITTED}")"
+  printf 'committed_missing=%d\n' "$(( expected - committed ))"
+  printf 'interrupted=%s\n' "$(checkpoint_interrupted "${node}")"
+}
+
+# Report a finished trial: compare the ledger with the node that holds the data, and for the
+# crash-matrix cases add the data checks. The standby is first given time to catch up.
+# Usage: write_trial_result SCENARIO MARK WORK_FOLDER
+write_trial_result() {
+  log INFO 'reporting the trial'
+  local scenario="${1:?scenario required}"
+  local mark="${2:?mark required}"
+  local work="${3:?work folder required}"
+  local node="${STANDBY_CONTAINER}"
+  local expected=0
+  local position
+  local -a command=(env "MARK_US=${mark}" bash "${SCRIPT_DIR}report-ledger.sh")
+
+  case "${scenario}" in
+    standby-crash)
+      position="$(database::bare "${PRIMARY_CONTAINER}" <<< 'select pg_current_wal_lsn()')"
+      database::wait_for_replay "${STANDBY_CONTAINER}" "${position}"
+      ;;
+    primary-restart | midtx | checkpoint)
+      node="${PRIMARY_CONTAINER}"
+      ;;
+    *)
+      node="${STANDBY_CONTAINER}"
+      ;;
+  esac
+  [[ "${scenario}" != 'midtx' ]] || expected="${MIDTX_ROWS}"
+  [[ "${scenario}" != 'checkpoint' ]] || expected="${CHECKPOINT_ROWS}"
+  command+=(--ledger "${work}/ledger" --node "${node}")
+  "${command[@]}" > "${work}/result"
+  case "${scenario}" in
+    standby-crash | primary-restart | midtx | checkpoint)
+      verify_data "${node}" "${expected}" >> "${work}/result"
+      ;;
+    *)
+      log INFO 'no crash-matrix checks for this scenario'
+      ;;
+  esac
+}
+
+# Run the trial: probe writes, cause the failure, keep probing, stop, and report. The work
+# folder holds the ledger, the stop file and the result.
 # Usage: run_trial SCENARIO LAG WORK_FOLDER
 run_trial() {
   log INFO 'running the trial'
@@ -117,7 +262,6 @@ run_trial() {
   local work="${3:?work folder required}"
   local mark
   local pid
-  local -a command=()
 
   prepare_stack "${scenario}"
   printf 'go' > "${work}/stop"
@@ -129,9 +273,7 @@ run_trial() {
   sleep "${RECOVERY_SECONDS}"
   printf 'stop' > "${work}/stop"
   wait "${pid}" || die 1 'the write prober ended with an error'
-  command=(env "MARK_US=${mark}" bash "${SCRIPT_DIR}report-ledger.sh")
-  command+=(--ledger "${work}/ledger" --node "${STANDBY_CONTAINER}")
-  "${command[@]}" > "${work}/result"
+  write_trial_result "${scenario}" "${mark}" "${work}"
 }
 
 # Put everything back: stop the prober, heal the network, restore the starting state,

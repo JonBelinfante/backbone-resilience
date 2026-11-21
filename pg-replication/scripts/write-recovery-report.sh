@@ -26,7 +26,6 @@ readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 readonly DEFAULT_RESULTS="${SCRIPT_DIR}../docs/recovery-results.txt"
 readonly DEFAULT_REPORT="${SCRIPT_DIR}../docs/recovery-report.md"
 readonly MONTH_BUDGET_MS=26000
-readonly NO_RESULTS='FAIL: no results'
 
 # shellcheck source=./runtime.sh
 source "${SCRIPT_DIR}runtime.sh"
@@ -36,6 +35,8 @@ source "${SCRIPT_DIR}../lib/container.sh"
 source "${SCRIPT_DIR}../lib/database.sh"
 # shellcheck source=../lib/measure.sh
 source "${SCRIPT_DIR}../lib/measure.sh"
+# shellcheck source=../lib/judge.sh
+source "${SCRIPT_DIR}../lib/judge.sh"
 
 # Print how to run this script.
 usage() {
@@ -63,113 +64,6 @@ check_environment() {
   require_integer RTO_TARGET_SECONDS "${RTO_TARGET_SECONDS}"
 }
 
-# Print PASS, or FAIL, for a clean stop that must lose nothing, or PASS for a crash.
-# Usage: judge_loss_in_stop RESULTS SCENARIO
-judge_loss_in_stop() {
-  log INFO 'judging whether a clean stop lost writes'
-  local results="${1:?results required}"
-  local scenario="${2:?scenario required}"
-  local lost
-
-  lost="$(measure::max "${results}" "${scenario}" 0 acked_missing)"
-  if [[ "${scenario}" == 'stop' && "${lost}" != '0' ]]; then
-    printf 'FAIL: %s acknowledged writes lost in a clean stop\n' "${lost}"
-  else
-    printf 'PASS\n'
-  fi
-}
-
-# Print PASS, or FAIL and the reason, for a stop or crash case against its RTO target.
-# Usage: judge_outage RESULTS SCENARIO
-judge_outage() {
-  log INFO 'judging the outage'
-  local results="${1:?results required}"
-  local scenario="${2:?scenario required}"
-  local outage
-  local open
-  local delay
-  local limit
-
-  outage="$(measure::max "${results}" "${scenario}" 0 longest_outage_ms)"
-  open="$(measure::max "${results}" "${scenario}" 0 open_outage)"
-  delay="$(measure::max "${results}" "${scenario}" 0 decision_delay)"
-  limit=$(( (delay + RTO_TARGET_SECONDS) * 1000 ))
-  if [[ "${outage}" == 'n/a' ]]; then
-    printf '%s\n' "${NO_RESULTS}"
-  elif (( open > 0 )); then
-    printf 'FAIL: the prober never wrote again\n'
-  elif (( outage > limit )); then
-    printf 'FAIL: outage %s ms is over %s ms\n' "${outage}" "${limit}"
-  else
-    judge_loss_in_stop "${results}" "${scenario}"
-  fi
-}
-
-# Print PASS, or FAIL and the reason, for an async or control case.
-# Usage: judge_loss RESULTS SCENARIO LAG
-judge_loss() {
-  log INFO 'judging the loss'
-  local results="${1:?results required}"
-  local scenario="${2:?scenario required}"
-  local lag="${3:?lag required}"
-  local lost
-
-  lost="$(measure::max "${results}" "${scenario}" "${lag}" acked_missing)"
-  if [[ "${lost}" == 'n/a' ]]; then
-    printf '%s\n' "${NO_RESULTS}"
-  elif [[ "${scenario}" == 'async' && "${lag}" == '0' ]]; then
-    printf 'PASS (recorded, no target at lag 0)\n'
-  elif (( lost > 0 )); then
-    printf 'PASS (most lost in a trial: %s)\n' "${lost}"
-  else
-    printf 'FAIL: no loss seen, so the measurement cannot see loss\n'
-  fi
-}
-
-# Print PASS, or FAIL and the reason, for one case against its target.
-# Usage: judge_case RESULTS SCENARIO LAG
-judge_case() {
-  log INFO 'judging one case'
-  local results="${1:?results required}"
-  local scenario="${2:?scenario required}"
-  local lag="${3:?lag required}"
-  local lost
-
-  case "${scenario}" in
-    stop | crash)
-      judge_outage "${results}" "${scenario}"
-      ;;
-    sync)
-      lost="$(measure::max "${results}" sync "${lag}" acked_missing)"
-      if [[ "${lost}" == '0' ]]; then
-        printf 'PASS\n'
-      else
-        printf 'FAIL: %s acknowledged writes lost under sync\n' "${lost}"
-      fi
-      ;;
-    *)
-      judge_loss "${results}" "${scenario}" "${lag}"
-      ;;
-  esac
-}
-
-# Print how many cases missed their target.
-# Usage: count_failures RESULTS CASES
-count_failures() {
-  log INFO 'counting missed targets'
-  local results="${1:?results required}"
-  local cases="${2:?cases required}"
-  local line
-  local failures=0
-
-  while IFS= read -r line; do
-    if [[ "$(judge_case "${results}" "${line% *}" "${line#* }")" == FAIL* ]]; then
-      failures=$(( failures + 1 ))
-    fi
-  done <<< "${cases}"
-  printf '%d\n' "${failures}"
-}
-
 # Print the report's title, when and where it was made, and what the numbers mean.
 report_header() {
   log INFO 'writing the report header'
@@ -191,6 +85,42 @@ report_header() {
   printf 'as the client sees it. A write that failed but is present is in doubt, not lost.\n\n'
 }
 
+# Print what a case is held to, in a few words.
+# Usage: verdict_target SCENARIO
+verdict_target() {
+  local scenario="${1:?scenario required}"
+
+  case "${scenario}" in
+    stop)
+      printf 'outage within the RTO target, nothing lost\n'
+      ;;
+    crash)
+      printf 'outage within the RTO target\n'
+      ;;
+    async)
+      printf 'the lag shows up as loss (lag 0: recorded only)\n'
+      ;;
+    sync)
+      printf '**no acknowledged write lost**\n'
+      ;;
+    standby-crash)
+      printf 'the standby catches up; no write fails\n'
+      ;;
+    primary-restart)
+      printf 'restart within the target; nothing lost; indexes intact\n'
+      ;;
+    midtx)
+      printf 'uncommitted rows gone, committed rows kept; indexes intact\n'
+      ;;
+    checkpoint)
+      printf 'the crash lands in a checkpoint; nothing lost; indexes intact\n'
+      ;;
+    *)
+      printf 'loss reappears at commit level local\n'
+      ;;
+  esac
+}
+
 # Print the verdict table: one row per case, its target and PASS or FAIL.
 # Usage: report_verdicts RESULTS CASES
 report_verdicts() {
@@ -205,24 +135,8 @@ report_verdicts() {
   measure::row Case 'Lag (s)' Target Result
   measure::row --- --- --- ---
   while IFS= read -r line; do
-    case "${line% *}" in
-      stop)
-        target='outage within the RTO target, nothing lost'
-        ;;
-      crash)
-        target='outage within the RTO target'
-        ;;
-      async)
-        target='the lag shows up as loss (lag 0: recorded only)'
-        ;;
-      sync)
-        target='**no acknowledged write lost**'
-        ;;
-      *)
-        target='loss reappears at commit level local'
-        ;;
-    esac
-    verdict="$(judge_case "${results}" "${line% *}" "${line#* }")"
+    target="$(verdict_target "${line% *}")"
+    verdict="$(judge::case "${results}" "${line% *}" "${line#* }" "${RTO_TARGET_SECONDS}")"
     measure::row "${line% *}" "${line#* }" "${target}" "${verdict}"
   done <<< "${cases}"
   printf '\n'
@@ -273,6 +187,7 @@ report_rpo() {
   measure::row --- --- --- --- --- --- ---
   while IFS= read -r line; do
     [[ "${line% *}" == 'stop' || "${line% *}" == 'crash' ]] && continue
+    ! measure::is_matrix "${line% *}" || continue
     cells=("${line% *}" "${line#* }")
     cells+=("$(measure::count "${results}" "${cells[0]}" "${cells[1]}")")
     cells+=("$(measure::median "${results}" "${cells[0]}" "${cells[1]}" acked)")
@@ -283,6 +198,45 @@ report_rpo() {
   done <<< "${cases}"
   printf '\nUnder sync the outage is the time writes were blocked while the standby was cut off:\n'
   printf 'the price of RPO 0.\n\n'
+}
+
+# Print the crash-matrix table: what survived a crash with no failover.
+# Usage: report_matrix RESULTS CASES
+report_matrix() {
+  log INFO 'writing the crash matrix'
+  local results="${1:?results required}"
+  local cases="${2:?cases required}"
+  local line
+  local name
+  local -a heads=()
+  local -a cells=()
+
+  printf '## Crash matrix: a node killed and restarted, no failover\n\n'
+  heads=(Case 'Down (s)' Trials 'Lost' 'Failed writes' 'Outage ms (min / median / max)')
+  heads+=('Index damage' 'Uncommitted rows kept' 'Committed rows missing')
+  heads+=('Crashes inside a checkpoint')
+  measure::row "${heads[@]}"
+  measure::row --- --- --- --- --- --- --- --- --- ---
+  while IFS= read -r line; do
+    measure::is_matrix "${line% *}" || continue
+    cells=("${line% *}" "${line#* }")
+    cells+=("$(measure::count "${results}" "${cells[0]}" "${cells[1]}")")
+    for name in acked_missing failed; do
+      cells+=("$(measure::max "${results}" "${cells[0]}" "${cells[1]}" "${name}")")
+    done
+    cells+=("$(measure::triple "${results}" "${cells[0]}" "${cells[1]}" longest_outage_ms)")
+    for name in index_failures uncommitted committed_missing; do
+      cells+=("$(measure::max "${results}" "${cells[0]}" "${cells[1]}" "${name}")")
+    done
+    if [[ "${cells[0]}" == 'checkpoint' ]]; then
+      name="$(measure::sum "${results}" "${cells[0]}" "${cells[1]}" interrupted)"
+      cells+=("${name} of ${cells[2]}")
+    else
+      cells+=('n/a')
+    fi
+    measure::row "${cells[@]}"
+  done <<< "${cases}"
+  printf '\nEach figure is the worst over the trials. Index damage is from amcheck.\n\n'
 }
 
 # Print every trial as a table row.
@@ -317,6 +271,7 @@ report_limits() {
   printf -- '- RTO is the time until a write succeeds somewhere, seen through the Docker host.\n'
   printf '  There is no router or client library, and promotion is a script, not a controller.\n'
   printf -- '- About 10 writes a second: loss is counted in tens of writes, not thousands.\n'
+  printf -- '- The crash matrix kills the container (SIGKILL); a power cut is not tested.\n'
   printf -- '- Where a case has no target the number is recorded only.\n\n'
   printf 'Reproduce: bash scripts/measure-recovery.sh (its --help lists the settings).\n'
 }
@@ -337,10 +292,11 @@ write_report() {
     report_verdicts "${results}" "${cases}"
     report_rto "${results}" "${cases}"
     report_rpo "${results}" "${cases}"
+    report_matrix "${results}" "${cases}"
     report_trials "${results}"
     report_limits
   } > "${report}"
-  failures="$(count_failures "${results}" "${cases}")"
+  failures="$(judge::failures "${results}" "${cases}" "${RTO_TARGET_SECONDS}")"
   printf 'report written to %s: %s target(s) missed\n' "${report}" "${failures}"
   (( failures == 0 )) || die 1 "${failures} target(s) missed: see the report"
 }

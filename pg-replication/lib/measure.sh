@@ -165,3 +165,51 @@ measure::commit_label() {
   fi
   printf '%s\n' "${label}"
 }
+
+# Succeed if the scenario is one of the four crash-matrix cases.
+# Usage: measure::is_matrix SCENARIO
+measure::is_matrix() {
+  local scenario="${1:?scenario required}"
+
+  case "${scenario}" in
+    standby-crash | primary-restart | midtx | checkpoint)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Print the result lines of a file whose scenario is not in a comma-separated list, so a new run
+# of some scenarios can replace their old results and leave the others alone.
+# Usage: measure::keep_other_results RESULTS_FILE SCENARIOS
+measure::keep_other_results() {
+  local results="${1:?results file required}"
+  local scenarios=",${2:?scenarios required},"
+  local line
+  local scenario
+
+  while IFS= read -r line; do
+    scenario="$(measure::field "${line}" scenario)"
+    if [[ "${scenarios}" != *",${scenario},"* ]]; then
+      printf '%s\n' "${line}"
+    fi
+  done < "${results}"
+}
+
+# Print the sum of the values of a name over the trials of a case.
+# Usage: measure::sum RESULTS_FILE SCENARIO LAG NAME
+measure::sum() {
+  local results="${1:?results file required}"
+  local scenario="${2:?scenario required}"
+  local lag="${3:?lag required}"
+  local name="${4:?name required}"
+  local value
+  local total=0
+
+  while IFS= read -r value; do
+    total=$(( total + value ))
+  done <<< "$(measure::values "${results}" "${scenario}" "${lag}" "${name}")"
+  printf '%d\n' "${total}"
+}
