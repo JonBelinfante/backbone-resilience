@@ -1,6 +1,6 @@
 # Recovery measurements: RPO and RTO
 
-Written by write-recovery-report.sh on 2026-11-21 13:03:35 UTC, at commit 79c08e0 plus uncommitted changes.
+Written by write-recovery-report.sh on 2026-11-21 13:19:44 UTC, at commit 4e33ae9.
 PostgreSQL 16.16 (Debian 16.16-1.pgdg13+1), two nodes in Docker Compose on one machine.
 A write about every 100 ms. RTO target: 30 s beyond the decision delay.
 This file is overwritten by every run.
