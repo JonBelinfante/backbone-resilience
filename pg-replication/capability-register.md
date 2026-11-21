@@ -83,6 +83,27 @@ GAP-05 to RTO-01, GAP-08 to DEC-01, GAP-09 to OPS-04, GAP-13 to SEC-R2, GAP-14 t
 | GAP-12 | **The application layer**: outbox, idempotent consumers, per-aggregate sequences, the independent invariant checker. DEC-01 proves only the database-library guard | The platform's actual consistency story | **M5.** Build the service, relay and checker; then re-run every experiment above with the service on, and the checker's assertions (no lost or phantom events, no double effect, no sequence gaps, archive fold equals state) must hold |
 | GAP-15 | **RTO with automatic detection, and under load.** RTO-01 is the speed of the promotion script with a fixed decision delay of 0; nothing yet measures how long a detector takes to notice, or the outage at realistic write rates | The decision delay is the largest part of a real RTO | **M4** with GAP-07: run this same measurement with the controller deciding, and report detection time and promotion time separately. With GAP-10, repeat at a higher write rate |
 
+### Order of work
+
+The gaps depend on each other. The service language is decided: **all Python** (CLAUDE.md), with its own standard
+(ruff, mypy, pytest) to be set up before the first service. Infrastructure scripts and experiments stay Bash.
+
+| Gap or item | Needs first | Language |
+|---|---|---|
+| GAP-06 rest of the crash matrix | nothing (the prober and fault library exist) | Bash |
+| SEC-08 rotation lock, and rotation under sync as a test | nothing | Bash |
+| GAP-10 load, database level (`pgbench`) | nothing | Bash |
+| GAP-11 network faults (Toxiproxy) | nothing | Bash, compose |
+| GAP-03 fencing | GAP-11 (partition test) | node-side agent: Python |
+| GAP-07 automatic failover | GAP-03 (fence before promote); GAP-11 (partition cases) | Python |
+| GAP-15 RTO with a detector, under load | GAP-07, GAP-10 | Python |
+| GAP-12 application layer | the Python standard; a broker in compose; the prober ledger idea (the checker reuses it) | Python |
+
+Order: (1) the Python standard can be set up at any point before step 4; (2) GAP-06, SEC-08, GAP-10 at database level,
+in any order; (3) GAP-11, which unblocks the control plane's partition tests and lets RPO-01 be re-run with gradual
+latency; (4) **the critical path GAP-03, GAP-07, GAP-15**; (5) GAP-12 is built alongside step 4 but proved last, by
+re-running every earlier experiment with the service on and the checker watching.
+
 ## 5. Evidence log, 2026-11-14
 
 Raw observations behind the "manual" rows. Setting: both containers healthy, async mode at the start, starting roles.
