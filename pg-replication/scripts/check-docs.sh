@@ -158,14 +158,14 @@ write_definitions() {
 }
 
 # Run the link and name checks on the documents and print the problems found.
-# Usage: check_documents DOCS CODE
+# The temporary file is made by the caller, because a file registered for clean-up inside a
+# command substitution (a subshell) would never be removed.
+# Usage: check_documents DOCS CODE DEFINITIONS_FILE
 check_documents() {
   local docs="${1:?docs required}"
   local code="${2:?code required}"
-  local definitions_file
+  local definitions_file="${3:?definitions file required}"
 
-  definitions_file="$(mktemp "${TEMP_DIR}/${SCRIPT_NAME}-definitions.XXXXXX")"
-  CLEANUP_PATHS+=("${definitions_file}")
   write_definitions "${code}" "${definitions_file}"
   run_awk pairs "${docs}" -v "definitions_file=${definitions_file}"
 }
@@ -177,12 +177,15 @@ run_checks() {
   local pages
   local code
   local report
+  local definitions_file
   local -a findings=()
 
+  definitions_file="$(mktemp "${TEMP_DIR}/${SCRIPT_NAME}-definitions.XXXXXX")"
+  CLEANUP_PATHS+=("${definitions_file}")
   docs="$(list_files '*.md')"
   pages="$(list_files '*.md' "${ROOT_DIR}/docs")"
   code="$(list_files '*.sh')"
-  report="$(check_links "${docs}"; check_documents "${pages}" "${code}")"
+  report="$(check_links "${docs}"; check_documents "${pages}" "${code}" "${definitions_file}")"
   if [[ -n "${report}" ]]; then
     printf '%s\n' "${report}"
     mapfile -t findings <<< "${report}"
