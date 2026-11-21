@@ -141,3 +141,23 @@ database::slot_state() {
   sql+=" coalesce(safe_wal_size, 0) / 1048576 from pg_replication_slots where slot_name = '${slot}'"
   database::bare "${container}" <<< "${sql}"
 }
+
+# Run pgbench on appdb in the container with many clients for some seconds. The transaction script
+# comes from standard input. pgbench prints its summary; a client that loses its connection makes it
+# fail, as it does when the server crashes.
+# Usage: database::load CONTAINER CLIENTS SECONDS
+database::load() {
+  local container="${1:?container required}"
+  local clients="${2:?clients required}"
+  local seconds="${3:?seconds required}"
+  local -a command=(docker exec -i "${container}" pgbench --no-vacuum --username postgres)
+
+  if [[ ! "${container}" =~ ${DATABASE_NAME_PATTERN} ]]; then
+    die 2 "not a valid container name: ${container}"
+  fi
+  require_integer clients "${clients}"
+  require_integer seconds "${seconds}"
+  command+=(--client "${clients}" --jobs 4 --time "${seconds}")
+  command+=(--file /dev/stdin appdb)
+  "${command[@]}"
+}
