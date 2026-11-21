@@ -18,7 +18,7 @@ shopt -s inherit_errexit
 readonly PGDATA="${PGDATA:-}"
 readonly POSTGRES_USER="${POSTGRES_USER:-}"
 readonly POSTGRES_DB="${POSTGRES_DB:-}"
-readonly REPLICATION_USER="${REPLICATION_USER:-}"
+readonly REPLICATION_USER_FILE="${REPLICATION_USER_FILE:-}"
 readonly REPLICATION_PASSWORD_FILE="${REPLICATION_PASSWORD_FILE:-}"
 readonly STANDBY_SLOT="${STANDBY_SLOT:-}"
 readonly RUN_LOG_DIR="${RUN_LOG_DIR:-${TMPDIR:-/tmp}}"
@@ -80,8 +80,8 @@ time the data volume is empty; it does not run again on later restarts.
   3. Allow that role to connect for replication (pg_hba.conf).
 
 Environment (all required, set in docker-compose.yml): PGDATA, POSTGRES_USER,
-POSTGRES_DB, REPLICATION_USER, REPLICATION_PASSWORD_FILE (the path of the file that holds
-the replication password; a Docker secret), STANDBY_SLOT.
+POSTGRES_DB, REPLICATION_USER_FILE and REPLICATION_PASSWORD_FILE (the paths of the files that
+hold the replication role name and its password; Docker secrets), STANDBY_SLOT.
 RUN_LOG_DIR is the directory for the run log (default: temporary directory).
 
 Exit codes: 0 success, 1 failure, 2 usage or configuration error
@@ -99,8 +99,11 @@ check_environment() {
   if [[ -z "${POSTGRES_DB}" ]]; then
     die 2 'POSTGRES_DB must be set'
   fi
-  if [[ -z "${REPLICATION_USER}" ]]; then
-    die 2 'REPLICATION_USER must be set'
+  if [[ -z "${REPLICATION_USER_FILE}" ]]; then
+    die 2 'REPLICATION_USER_FILE must be set'
+  fi
+  if [[ ! -r "${REPLICATION_USER_FILE}" ]]; then
+    die 2 'the file named by REPLICATION_USER_FILE is not readable'
   fi
   if [[ -z "${REPLICATION_PASSWORD_FILE}" ]]; then
     die 2 'REPLICATION_PASSWORD_FILE must be set'
@@ -188,10 +191,12 @@ SQL
 # exit non-zero on the first error, so initialisation stops.
 create_role_and_slot() {
   local password
+  local role
 
   password="$(< "${REPLICATION_PASSWORD_FILE}")"
-  log INFO "creating role ${REPLICATION_USER} and slot ${STANDBY_SLOT}"
-  REPLICATION_PASSWORD="${password}" psql -v ON_ERROR_STOP=1 \
+  role="$(< "${REPLICATION_USER_FILE}")"
+  log INFO "creating role ${role} and slot ${STANDBY_SLOT}"
+  REPLICATION_USER="${role}" REPLICATION_PASSWORD="${password}" psql -v ON_ERROR_STOP=1 \
     --username "${POSTGRES_USER}" \
     --dbname "${POSTGRES_DB}" \
     <<< "$(sql_role_and_slot)"
@@ -201,8 +206,11 @@ create_role_and_slot() {
 # a special pseudo-database; "all" does not match it. The line is appended to pg_hba.conf,
 # which is read when the server starts after initialisation.
 allow_replication() {
-  log INFO "allowing ${REPLICATION_USER} to connect for replication"
-  printf '%s\n' "host replication ${REPLICATION_USER} all scram-sha-256" >> "${PGDATA}/pg_hba.conf"
+  local role
+
+  role="$(< "${REPLICATION_USER_FILE}")"
+  log INFO "allowing ${role} to connect for replication"
+  printf '%s\n' "host replication ${role} all scram-sha-256" >> "${PGDATA}/pg_hba.conf"
 }
 
 # Handle a signal that ends the run: say which one, then stop with the status a shell gives it.
@@ -250,7 +258,7 @@ main() {
   check_environment
 
   printf '[primary-init] initialising primary: role=%s slot=%s\n' \
-    "${REPLICATION_USER}" \
+    "$(< "${REPLICATION_USER_FILE}")" \
     "${STANDBY_SLOT}"
   create_role_and_slot
   allow_replication

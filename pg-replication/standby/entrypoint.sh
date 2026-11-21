@@ -13,14 +13,14 @@ fi
 
 shopt -s inherit_errexit
 
-# Environment: PGDATA, PRIMARY_HOST, REPLICATION_USER, REPLICATION_PASSWORD_FILE (the path of the
-# file that holds the replication password) and POSTGRES_USER are required (checked in
-# check_environment). PRIMARY_PORT defaults to 5432, STANDBY_NAME to standby1, and STANDBY_SLOT
-# to standby1_slot. RUN_LOG_DIR defaults to the temporary directory.
+# Environment: PGDATA, PRIMARY_HOST, REPLICATION_USER_FILE and REPLICATION_PASSWORD_FILE (the
+# paths of the files that hold the replication role name and password) and POSTGRES_USER are
+# required (checked in check_environment). PRIMARY_PORT defaults to 5432, STANDBY_NAME to
+# standby1, and STANDBY_SLOT to standby1_slot. RUN_LOG_DIR defaults to the temporary directory.
 readonly PGDATA="${PGDATA:-}"
 readonly PRIMARY_HOST="${PRIMARY_HOST:-}"
 readonly PRIMARY_PORT="${PRIMARY_PORT:-5432}"
-readonly REPLICATION_USER="${REPLICATION_USER:-}"
+readonly REPLICATION_USER_FILE="${REPLICATION_USER_FILE:-}"
 readonly REPLICATION_PASSWORD_FILE="${REPLICATION_PASSWORD_FILE:-}"
 readonly POSTGRES_USER="${POSTGRES_USER:-}"
 readonly STANDBY_NAME="${STANDBY_NAME:-standby1}"
@@ -107,9 +107,10 @@ directory is reused and streaming resumes where it left off.
 
 The command must follow `--` (docker-compose.yml: entrypoint ends with "--").
 
-Environment: PGDATA, PRIMARY_HOST, REPLICATION_USER, REPLICATION_PASSWORD_FILE (the path
-of the file that holds the replication password, a Docker secret) and POSTGRES_USER are required. PRIMARY_PORT (5432), STANDBY_NAME (standby1) and
-STANDBY_SLOT (standby1_slot) have defaults. RUN_LOG_DIR is the run log directory.
+Environment: PGDATA, PRIMARY_HOST, REPLICATION_USER_FILE, REPLICATION_PASSWORD_FILE (paths of
+Docker secret files holding the replication role and its password) and POSTGRES_USER are
+required. PRIMARY_PORT (5432), STANDBY_NAME (standby1) and STANDBY_SLOT (standby1_slot) have
+defaults. RUN_LOG_DIR is the run log directory.
 
 Exit codes: 0 success, 1 failure, 2 usage or configuration error
 USAGE
@@ -123,8 +124,11 @@ check_environment() {
   if [[ -z "${PRIMARY_HOST}" ]]; then
     die 2 'PRIMARY_HOST must be set'
   fi
-  if [[ -z "${REPLICATION_USER}" ]]; then
-    die 2 'REPLICATION_USER must be set'
+  if [[ -z "${REPLICATION_USER_FILE}" ]]; then
+    die 2 'REPLICATION_USER_FILE must be set'
+  fi
+  if [[ ! -r "${REPLICATION_USER_FILE}" ]]; then
+    die 2 'the file named by REPLICATION_USER_FILE is not readable'
   fi
   if [[ -z "${REPLICATION_PASSWORD_FILE}" ]]; then
     die 2 'REPLICATION_PASSWORD_FILE must be set'
@@ -223,12 +227,14 @@ wait_for_primary() {
 # --checkpoint=fast avoids waiting for the primary's next scheduled checkpoint.
 run_basebackup() {
   local password
+  local role
 
   password="$(< "${REPLICATION_PASSWORD_FILE}")"
+  role="$(< "${REPLICATION_USER_FILE}")"
   PGPASSWORD="${password}" gosu postgres pg_basebackup \
     -h "${PRIMARY_HOST}" \
     -p "${PRIMARY_PORT}" \
-    -U "${REPLICATION_USER}" \
+    -U "${role}" \
     -D "${PGDATA}" \
     -X stream \
     -S "${STANDBY_SLOT}" \
@@ -277,11 +283,12 @@ keep_other_settings() {
 # old file or the new one, never a half-written one.
 mark_as_standby() {
   local settings="${PGDATA}/postgresql.auto.conf"
-  local conninfo="host=${PRIMARY_HOST} port=${PRIMARY_PORT} user=${REPLICATION_USER}"
+  local conninfo
   local password
   local replaced
 
   password="$(< "${REPLICATION_PASSWORD_FILE}")"
+  conninfo="host=${PRIMARY_HOST} port=${PRIMARY_PORT} user=$(< "${REPLICATION_USER_FILE}")"
   conninfo+=" password=${password} application_name=${STANDBY_NAME}"
   gosu postgres touch "${PGDATA}/standby.signal"
   replaced="$(mktemp "${settings}.XXXXXX")"

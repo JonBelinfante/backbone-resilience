@@ -19,7 +19,6 @@ shopt -s inherit_errexit
 # The passwords are not configured here: they are read from the writable node's environment.
 readonly PRIMARY_CONTAINER="${PRIMARY_CONTAINER:-pg-primary}"
 readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
-readonly REPLICATION_USER="${REPLICATION_USER:-replicator}"
 readonly STANDBY_NAME="${STANDBY_NAME:-standby1}"
 readonly STANDBY_SLOT="${STANDBY_SLOT:-standby1_slot}"
 readonly REBUILD_MARKER_DIR="${REBUILD_MARKER_DIR:-${TMPDIR:-/tmp}}"
@@ -55,7 +54,6 @@ left it behind, the node is emptied and copied (pg_basebackup) instead.
 Environment:
   PRIMARY_CONTAINER  the stopped old primary (default: pg-primary)
   STANDBY_CONTAINER  the node accepting writes (default: pg-standby)
-  REPLICATION_USER   streaming role (default: replicator)
   STANDBY_NAME       application_name of the standby (default: standby1)
   STANDBY_SLOT       replication slot for the standby (default: standby1_slot)
   REBUILD_MARKER_DIR where the pending marker is kept (default: temporary directory)
@@ -182,9 +180,12 @@ clear_rebuild_marker() {
 write_standby_settings() {
   log INFO 'marking the rewound data directory as a standby'
   local password
-  local conninfo="host=${STANDBY_CONTAINER} port=${DATABASE_PORT} user=${REPLICATION_USER}"
+  local role
+  local conninfo
 
   password="$(container::secret "${STANDBY_CONTAINER}" pg-replication-password)"
+  role="$(container::secret "${STANDBY_CONTAINER}" pg-replication-user)"
+  conninfo="host=${STANDBY_CONTAINER} port=${DATABASE_PORT} user=${role}"
   conninfo+=" password=${password} application_name=${STANDBY_NAME}"
   container::mark_standby \
     "${PRIMARY_CONTAINER}" \

@@ -27,12 +27,21 @@ readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 readonly DEFAULT_DELAYS='1,2,3,4,5,7,10,14'
 readonly FAILOVER_SECONDS=9
 readonly SETTLE_SECONDS=2
+readonly SECRETS_PATH="${SCRIPT_DIR}../secrets"
+readonly USER_FILE_PATH="${SECRETS_PATH}/pg-replication-user.txt"
+readonly KEY_FILE_PATH="${SECRETS_PATH}/pg-replication-password.txt"
+readonly SQL_STREAMING_ROLE="select usename from pg_stat_replication where state = 'streaming'"
+readonly SQL_ROLE_COUNT='select count(*) from pg_roles where rolreplication and not rolsuper'
 readonly DELAY_PATTERN='^[0-9]+([.][0-9]+)?$'
 
 # shellcheck source=./runtime.sh
 source "${SCRIPT_DIR}runtime.sh"
 # shellcheck source=../lib/container.sh
 source "${SCRIPT_DIR}../lib/container.sh"
+# shellcheck source=../lib/database.sh
+source "${SCRIPT_DIR}../lib/database.sh"
+# shellcheck source=../lib/access.sh
+source "${SCRIPT_DIR}../lib/access.sh"
 
 # Print how to run this script.
 usage() {
@@ -40,14 +49,15 @@ usage() {
 Usage: test-hard-kill.sh [-h | --help] [--target NAME] [--delays LIST]
 
 Start a script in its own process group, kill the whole group with SIGKILL after each delay
-(no trap runs, and its docker commands die mid-step), then run restore-starting-state.sh and
-require it to recover: primary writes, standby streaming, and no node holding more than one
-primary_conninfo line (no old password left on disk). Each case starts from a restored
-stack, and the run stops at the first case that does not recover.
+(no trap runs, its docker commands die mid-step), then recover and require: primary writes,
+standby streaming, and no node holding more than one primary_conninfo line. Each case starts
+from a restored stack; the run stops at the first case that does not recover.
 
-  --target NAME  roundtrip: kill test-failover-roundtrip.sh (default)
-                 restore: fail over first, then kill restore-starting-state.sh
-  --delays LIST  seconds to wait before the kill, comma separated (default: 1,2,3,4,5,7,10,14)
+  --target NAME  roundtrip: kill test-failover-roundtrip.sh, recover with the restore (default)
+                 restore: fail over first, kill restore-starting-state.sh, recover with it
+                 rotate: kill rotate-secret.sh, recover by running it again (it converges);
+                 also requires the secret files to describe a working login and one role
+  --delays LIST  seconds before the kill, comma separated (default: 1,2,3,4,5,7,10,14)
 
 A case where the script finished before the kill is reported, because it tested nothing.
 This test changes the databases: use it only on the throwaway stack.
@@ -71,8 +81,11 @@ script_for_target() {
     restore)
       printf 'restore-starting-state.sh\n'
       ;;
+    rotate)
+      printf 'rotate-secret.sh\n'
+      ;;
     *)
-      die 2 "unknown target: ${target} (use roundtrip or restore)"
+      die 2 "unknown target: ${target} (use roundtrip, restore or rotate)"
       ;;
   esac
 }
@@ -126,6 +139,55 @@ check_single_conninfo() {
   done
 }
 
+# Recover after the kill: rotation is recovered by running it again, everything else by the
+# restore.
+# Usage: recover_stack TARGET
+recover_stack() {
+  log INFO 'recovering the stack'
+  local target="${1:?target required}"
+
+  if [[ "${target}" == 'rotate' ]]; then
+    bash "${SCRIPT_DIR}rotate-secret.sh" > /dev/null 2>&1
+  else
+    bash "${SCRIPT_DIR}restore-starting-state.sh" > /dev/null 2>&1
+  fi
+}
+
+# Succeed if the secret files describe a working login: the standby streams as the role named in
+# pg-replication-user.txt, that role and its password in the other file log in, and it is the
+# only replication role left.
+check_rotation_consistent() {
+  log INFO 'checking that the secret files match the database'
+  local role
+  local seen
+  local count
+
+  role="$(< "${USER_FILE_PATH}")"
+  seen="$(database::bare "${PRIMARY_CONTAINER}" <<< "${SQL_STREAMING_ROLE}")"
+  count="$(database::bare "${PRIMARY_CONTAINER}" <<< "${SQL_ROLE_COUNT}")"
+  if [[ "${seen}" != "${role}" || "${count}" != '1' ]]; then
+    log ERROR "the standby streams as '${seen}', the file says '${role}', ${count} roles exist"
+    return 1
+  fi
+  access::probe_replication_login \
+    "${STANDBY_CONTAINER}" \
+    "${PRIMARY_CONTAINER}" \
+    "${role}" \
+    "${KEY_FILE_PATH}"
+}
+
+# Succeed if the recovered stack passes the checks that go with the target.
+# Usage: check_recovered TARGET
+check_recovered() {
+  log INFO 'checking the recovered stack'
+  local target="${1:?target required}"
+
+  check_single_conninfo || return 1
+  if [[ "${target}" == 'rotate' ]]; then
+    check_rotation_consistent
+  fi
+}
+
 # Run one case and print its result line; return 1 when the restore did not recover.
 # Usage: run_case TARGET DELAY
 run_case() {
@@ -138,9 +200,8 @@ run_case() {
   prepare_case "${target}"
   outcome="$(kill_after_delay "${delay}" "$(script_for_target "${target}")")"
   sleep "${SETTLE_SECONDS}"
-  if bash "${SCRIPT_DIR}restore-starting-state.sh" > /dev/null 2>&1 &&
-    check_single_conninfo; then
-    printf 'PASS %s, %s at %ss: the restore recovered the stack, one conninfo per node\n' \
+  if recover_stack "${target}" && check_recovered "${target}"; then
+    printf 'PASS %s, %s at %ss: the stack recovered and its settings are consistent\n' \
       "${target}" \
       "${outcome}" \
       "${delay}"

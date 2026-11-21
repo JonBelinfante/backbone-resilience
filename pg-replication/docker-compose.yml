@@ -32,11 +32,12 @@ services:
     secrets:
       - pg-password
       - pg-replication-password
+      - pg-replication-user
     environment:
       POSTGRES_USER: ${PG_USER:?set PG_USER in .env}
       POSTGRES_PASSWORD_FILE: /run/secrets/pg-password
       POSTGRES_DB: appdb
-      REPLICATION_USER: ${PG_REPLICATION_USER:?set PG_REPLICATION_USER in .env}
+      REPLICATION_USER_FILE: /run/secrets/pg-replication-user
       REPLICATION_PASSWORD_FILE: /run/secrets/pg-replication-password
       STANDBY_NAME: ${PG_STANDBY_NAME:?set PG_STANDBY_NAME in .env}  # also the application_name used for synchronous replication
       STANDBY_SLOT: standby1_slot    # physical replication slot the primary keeps for the standby
@@ -82,11 +83,12 @@ services:
     secrets:
       - pg-password
       - pg-replication-password
+      - pg-replication-user
     environment:
       POSTGRES_USER: ${PG_USER:?set PG_USER in .env}
       POSTGRES_PASSWORD_FILE: /run/secrets/pg-password
       POSTGRES_DB: appdb
-      REPLICATION_USER: ${PG_REPLICATION_USER:?set PG_REPLICATION_USER in .env}
+      REPLICATION_USER_FILE: /run/secrets/pg-replication-user
       REPLICATION_PASSWORD_FILE: /run/secrets/pg-replication-password
       STANDBY_NAME: ${PG_STANDBY_NAME:?set PG_STANDBY_NAME in .env}
       STANDBY_SLOT: standby1_slot
@@ -115,3 +117,5 @@ secrets:
     file: ./secrets/pg-password.txt
   pg-replication-password:
     file: ./secrets/pg-replication-password.txt
+  pg-replication-user:
+    file: ./secrets/pg-replication-user.txt

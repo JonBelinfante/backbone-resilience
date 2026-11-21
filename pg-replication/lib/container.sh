@@ -5,7 +5,6 @@
 # Exit codes: none (the functions return, or call die of the script that imported them)
 
 readonly CONTAINER_NAME_PATTERN='^[A-Za-z0-9][A-Za-z0-9_.-]*$'
-readonly CONTAINER_CLONE_USER='replicator'
 readonly CONTAINER_MARK_KEEP="sed -e '/^primary_conninfo/d' -e '/^primary_slot_name/d'"
 readonly CONTAINER_MARK_FILTER="${CONTAINER_MARK_KEEP} postgresql.auto.conf > postgresql.auto.new"
 readonly CONTAINER_MARK_START='umask 077 && touch postgresql.auto.conf'
@@ -207,12 +206,14 @@ container::clone() {
   local network
   local volume
   local password
+  local role
   local data_dir
 
   image="$(container::image "${target}")"
   network="$(container::network "${target}")"
   volume="$(container::volume "${target}")"
   password="$(container::secret "${source}" pg-replication-password)"
+  role="$(container::secret "${source}" pg-replication-user)"
   data_dir="$(container::setting "${source}" PGDATA)"
   log INFO "CHANGE: emptying volume ${volume} and cloning ${source} into it"
   PGPASSWORD="${password}" docker run \
@@ -228,7 +229,7 @@ container::clone() {
     "${data_dir}" \
     "${source}" \
     "${port}" \
-    "${CONTAINER_CLONE_USER}"
+    "${role}"
 }
 
 # Print how many primary_conninfo lines the container's postgresql.auto.conf holds. Each node
@@ -303,4 +304,17 @@ container::mark_standby() {
       --entrypoint sh \
       "${image}" \
       -c "${program}"
+}
+
+# Remove a container and the data volume it uses: the node loses its disk. Use it to test that a
+# node can be rebuilt from nothing.
+# Usage: container::remove_with_volume CONTAINER
+container::remove_with_volume() {
+  local container="${1:?container required}"
+  local volume
+
+  volume="$(container::volume "${container}")"
+  log INFO "CHANGE: removing ${container} and its volume ${volume}"
+  docker rm --force "${container}" > /dev/null
+  docker volume rm "${volume}" > /dev/null
 }
