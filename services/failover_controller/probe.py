@@ -11,6 +11,11 @@ select pg_is_in_recovery(),
                where status = 'streaming'
                  and now() - last_msg_receipt_time < make_interval(secs => %s))
 """
+SQL_RENEW = """
+update fence_lease
+   set expires_at = clock_timestamp() + make_interval(secs => %s)
+ where id = 1
+"""
 
 
 @dataclass(frozen=True)
@@ -76,3 +81,21 @@ def probe_standby(target: Target, max_age_seconds: int) -> tuple[bool, bool] | N
     except psycopg.Error:
         return None
     return (bool(row[0]), bool(row[1])) if row else None
+
+
+def renew_lease(target: Target, ttl_seconds: int) -> bool:
+    """Push the writer's lease forward: it now runs out ``ttl_seconds`` from the writer's own clock.
+
+    Args:
+        target: the writer.
+        ttl_seconds: how long the lease lasts from now.
+
+    Returns:
+        True if the lease row was renewed, False if the writer did not take the update.
+    """
+    try:
+        with _connect(target) as connection:
+            cursor = connection.execute(SQL_RENEW, (ttl_seconds,))
+            return cursor.rowcount == 1
+    except psycopg.Error:
+        return False

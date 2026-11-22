@@ -24,13 +24,16 @@ controller::build() {
 # Start a detect-only controller. The writer is reached at WRITER_ENDPOINT (host:port), so a test
 # can route it through Toxiproxy and cut only the controller's view; the standby is reached
 # directly. MAX_AGE is how recent the standby's last message from the writer must be to count.
-# Usage: controller::start NAME LOGIN_PATH WRITER_ENDPOINT MAX_AGE
+# Further arguments, NAME=VALUE, are passed to the controller as environment settings (for example
+# LEASE_TTL_SECONDS=6 makes it keep the writer's lease alive).
+# Usage: controller::start NAME LOGIN_PATH WRITER_ENDPOINT MAX_AGE [NAME=VALUE ...]
 controller::start() {
   local name="${1:?name required}"
   local login_path="${2:?login path required}"
   local endpoint="${3:?writer endpoint required}"
   local max_age="${4:?max age required}"
   local -a command=(docker run --detach --name "${name}" --network "${CONTROLLER_NETWORK}")
+  local setting
 
   [[ "${name}" =~ ${CONTROLLER_NAME_PATTERN} ]] || die 2 "not a valid name: ${name}"
   command+=(--volume "${login_path}:/run/secrets/pg-password:ro")
@@ -39,6 +42,9 @@ controller::start() {
   command+=(--env "WRITER_PORT=${endpoint##*:}")
   command+=(--env STANDBY_HOST=pg-standby)
   command+=(--env "WITNESS_MAX_AGE_SECONDS=${max_age}")
+  for setting in "${@:5}"; do
+    command+=(--env "${setting}")
+  done
   command+=("${CONTROLLER_IMAGE}")
   log INFO "CHANGE: starting controller ${name} (writer at ${endpoint}, witness age ${max_age} s)"
   "${command[@]}" > /dev/null

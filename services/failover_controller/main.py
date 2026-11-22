@@ -1,4 +1,4 @@
-"""Run the failover controller in detect-only mode: probe, decide, log; never act."""
+"""Run the failover controller: probe, decide, log, and renew the writer's lease; never promote."""
 
 import logging
 import os
@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from failover_controller.detector import Detector, Observation, Verdict
-from failover_controller.probe import Target, probe_standby, probe_writer
+from failover_controller.probe import Target, probe_standby, probe_writer, renew_lease
 
 LOG = logging.getLogger("failover_controller")
 
@@ -40,7 +40,7 @@ def run(writer: Target, standby: Target, settings: dict[str, int]) -> None:
     Args:
         writer: how to reach the node that should be the writer.
         standby: how to reach the node that should be promoted.
-        settings: threshold, interval_seconds and max_age_seconds.
+        settings: threshold, interval_seconds, max_age_seconds and lease_ttl_seconds (0 = no lease).
     """
     detector = Detector(settings["threshold"])
     previous: Verdict | None = None
@@ -49,6 +49,13 @@ def run(writer: Target, standby: Target, settings: dict[str, int]) -> None:
         observation = observe(writer, standby, settings["max_age_seconds"])
         verdict = detector.observe(observation)
         LOG.info("probe failures=%d %s", detector.failures, observation)
+        if (
+            settings["lease_ttl_seconds"] > 0
+            and observation.writer_answers
+            and not observation.writer_in_recovery
+            and not renew_lease(writer, settings["lease_ttl_seconds"])
+        ):
+            LOG.info("lease not renewed")
         if verdict is not previous:
             LOG.info(
                 "DECISION verdict=%s failures=%d epoch=%.3f",
@@ -79,6 +86,7 @@ def main() -> None:
         "threshold": int(os.environ.get("THRESHOLD", "3")),
         "interval_seconds": int(os.environ.get("INTERVAL_SECONDS", "1")),
         "max_age_seconds": int(os.environ.get("WITNESS_MAX_AGE_SECONDS", "5")),
+        "lease_ttl_seconds": int(os.environ.get("LEASE_TTL_SECONDS", "0")),
     }
     LOG.info("DECISION detect-only controller started: %s", settings)
     run(writer, standby, settings)

@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: When the failover controller decides "fail-over", fence, promote and record the epoch.
 # Usage: act-on-failover.sh [-h | --help] --controller NAME
-# Requires: bash cat sleep
+# Requires: cat sleep
 # Exit codes: 0 acted or nothing to do, 1 failure, 2 usage or configuration error
 set -Eeuo pipefail
 
@@ -18,6 +18,7 @@ readonly PRIMARY_CONTAINER="${PRIMARY_CONTAINER:-pg-primary}"
 readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
 readonly EPOCH_FILE="${EPOCH_FILE:-}"
 readonly REBUILD_MARKER_DIR="${REBUILD_MARKER_DIR:-${TMPDIR:-/tmp}}"
+readonly FENCE_WAIT_SECONDS="${FENCE_WAIT_SECONDS:-0}"
 readonly ACTOR_LOCK="${ACTOR_LOCK:-on}"
 readonly ACTOR_CRASH_AFTER="${ACTOR_CRASH_AFTER:-none}"
 readonly WAIT_SECONDS="${WAIT_SECONDS:-120}"
@@ -53,7 +54,10 @@ A step already done is skipped, so a re-run is safe. Only one actor acts at a ti
 maintenance lock; ACTOR_LOCK=off removes it, as a test control).
 It waits up to WAIT_SECONDS (default 120) for the decision, then exits 0 having done nothing.
 
-Environment: EPOCH_FILE (required), ACTOR_CRASH_AFTER (a test hook: none, epoch, kill or promote makes
+Where the old writer cannot be reached to be killed, set FENCE_WAIT_SECONDS to its lease time plus a
+margin: the actor then waits that long for the writer's guard to stop it, and promotes with --force.
+
+Environment: EPOCH_FILE (required), FENCE_WAIT_SECONDS, ACTOR_CRASH_AFTER (a test hook: none, epoch, kill or promote makes
 the script SIGKILL itself after that step), PRIMARY_CONTAINER, STANDBY_CONTAINER, WAIT_SECONDS, RUN_LOG_DIR.
 
 Exit codes: 0 acted or nothing to do, 1 failure, 2 usage or configuration error
@@ -80,14 +84,29 @@ wait_for_decision() {
   return 1
 }
 
-# Stop the old writer for good, whatever state it is in (running, hung or gone).
+# Make sure the old writer can no longer take writes. If the actor can reach it, kill it. If not
+# (FENCE_WAIT_SECONDS is set), wait for its lease to run out: its guard then stops it.
 stop_old_writer() {
-  if [[ "$(container::is_running "${PRIMARY_CONTAINER}")" == 'true' ]]; then
+  if (( FENCE_WAIT_SECONDS > 0 )); then
+    log INFO "DECISION: not killing ${PRIMARY_CONTAINER}: waiting ${FENCE_WAIT_SECONDS} s (lease)"
+    sleep "${FENCE_WAIT_SECONDS}"
+  elif [[ "$(container::is_running "${PRIMARY_CONTAINER}")" == 'true' ]]; then
     log INFO "DECISION: killing the old writer ${PRIMARY_CONTAINER}"
     container::kill "${PRIMARY_CONTAINER}"
   else
     log INFO "${PRIMARY_CONTAINER} is already stopped"
   fi
+}
+
+# Promote the standby. After a lease wait the old writer may still run (stopped by its guard, or
+# not), so the promotion is forced; the promotion script fences its data directory either way.
+promote_standby() {
+  local -a command=(bash "${SCRIPT_DIR}promote-standby-to-primary.sh")
+
+  if (( FENCE_WAIT_SECONDS > 0 )); then
+    command+=(--force)
+  fi
+  "${command[@]}"
 }
 
 # Test hook: SIGKILL this script right after the named step, as a crash would.
@@ -123,7 +142,7 @@ fail_over() {
   crash_point epoch
   stop_old_writer
   crash_point kill
-  bash "${SCRIPT_DIR}promote-standby-to-primary.sh"
+  promote_standby
   crash_point promote
   epoch::finish "${epoch_file}"
   log INFO "DECISION: ${STANDBY_CONTAINER} is the writer at epoch ${epoch}"
@@ -135,6 +154,7 @@ check_environment() {
     die 2 'EPOCH_FILE must be set'
   fi
   require_integer WAIT_SECONDS "${WAIT_SECONDS}"
+  require_integer FENCE_WAIT_SECONDS "${FENCE_WAIT_SECONDS}"
 }
 
 # Script entry point.
@@ -169,7 +189,7 @@ main() {
   (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
   [[ -n "${controller}" ]] || die 2 '--controller is required'
   check_environment
-  require_commands bash cat sleep
+  require_commands cat sleep
   if ! wait_for_decision "${controller}" "${WAIT_SECONDS}"; then
     log INFO "no fail-over decision within ${WAIT_SECONDS} s: nothing done"
     return 0

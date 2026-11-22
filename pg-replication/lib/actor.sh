@@ -13,7 +13,8 @@ readonly ACTOR_WRITE_LIMIT_SECONDS=60
 readonly ACTOR_WRITE_SQL="select pg_logical_emit_message(true, 'auto-failover', 'x')"
 
 # Give the writer traffic and start a controller that watches it through Toxiproxy.
-# Usage: actor::watch WRITER_CONTAINER SCRIPT_DIR
+# Further arguments, NAME=VALUE, go to the controller (for example LEASE_TTL_SECONDS=6).
+# Usage: actor::watch WRITER_CONTAINER SCRIPT_DIR [NAME=VALUE ...]
 actor::watch() {
   local writer="${1:?writer container required}"
   local script_dir="${2-}"
@@ -23,7 +24,8 @@ actor::watch() {
     "${ACTOR_CONTROLLER}" \
     "$(controller::password_file "${script_dir}")" \
     "${ACTOR_PROXY_ENDPOINT}" \
-    "${ACTOR_WITNESS_SECONDS}"
+    "${ACTOR_WITNESS_SECONDS}" \
+    "${@:3}"
   sleep 2
 }
 
@@ -39,19 +41,17 @@ actor::unwatch() {
 }
 
 # Run the actor until it finishes. CRASH_AFTER is the test hook: none, epoch, kill or promote.
-# Usage: actor::run SCRIPT_DIR EPOCH_FILE CRASH_AFTER
+# Further arguments, NAME=VALUE, are settings for the actor (for example FENCE_WAIT_SECONDS=7).
+# Usage: actor::run SCRIPT_DIR EPOCH_FILE CRASH_AFTER [NAME=VALUE ...]
 actor::run() {
   local script_dir="${1-}"
   local epoch_file="${2:?epoch file required}"
   local crash_after="${3:?crash point required}"
+  local -a command=(env "EPOCH_FILE=${epoch_file}" "WAIT_SECONDS=${ACTOR_WAIT_SECONDS}")
 
-  story::run_logged env \
-    "EPOCH_FILE=${epoch_file}" \
-    "WAIT_SECONDS=${ACTOR_WAIT_SECONDS}" \
-    "ACTOR_CRASH_AFTER=${crash_after}" \
-    bash \
-    "${script_dir}act-on-failover.sh" \
-    --controller "${ACTOR_CONTROLLER}"
+  command+=("ACTOR_CRASH_AFTER=${crash_after}" "${@:4}")
+  command+=(bash "${script_dir}act-on-failover.sh" --controller "${ACTOR_CONTROLLER}")
+  story::run_logged "${command[@]}"
 }
 
 # Run the actor until it finishes, keeping its output in a file instead of the story; ACTOR_LOCK
@@ -89,4 +89,31 @@ actor::time_until_writable() {
     now="$(story::now_milliseconds)"
   done
   die 1 "FAIL: no write succeeded on ${node} within ${ACTOR_WRITE_LIMIT_SECONDS} s"
+}
+
+# Try a write on the writer every 0.2 s for some seconds, counted from STARTED_MS; print the time
+# of the last accepted write and of the first refused one (0 if none), in ms after the start.
+# Usage: actor::watch_writes NODE SECONDS STARTED_MS
+actor::watch_writes() {
+  local node="${1:?node required}"
+  local seconds="${2:?seconds required}"
+  local started="${3:?start time required}"
+  local give_up=$(( started + seconds * 1000 ))
+  local now
+  local last_ok=0
+  local first_fail=0
+
+  now="$(story::now_milliseconds)"
+  while (( now < give_up )); do
+    if database::bare "${node}" <<< "${ACTOR_WRITE_SQL}" > /dev/null 2>&1; then
+      last_ok=$(( now - started ))
+    elif (( first_fail == 0 )); then
+      first_fail=$(( now - started ))
+    else
+      log INFO "${node} still refuses writes"
+    fi
+    sleep 0.2
+    now="$(story::now_milliseconds)"
+  done
+  printf '%s %s\n' "${last_ok}" "${first_fail}"
 }
