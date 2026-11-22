@@ -17,6 +17,8 @@ shopt -s inherit_errexit
 readonly PRIMARY_CONTAINER="${PRIMARY_CONTAINER:-pg-primary}"
 readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
 readonly EPOCH_FILE="${EPOCH_FILE:-}"
+readonly REBUILD_MARKER_DIR="${REBUILD_MARKER_DIR:-${TMPDIR:-/tmp}}"
+readonly ACTOR_LOCK="${ACTOR_LOCK:-on}"
 readonly ACTOR_CRASH_AFTER="${ACTOR_CRASH_AFTER:-none}"
 readonly WAIT_SECONDS="${WAIT_SECONDS:-120}"
 
@@ -33,6 +35,8 @@ source "${SCRIPT_DIR}../lib/container.sh"
 source "${SCRIPT_DIR}../lib/database.sh"
 # shellcheck source=../lib/controller.sh
 source "${SCRIPT_DIR}../lib/controller.sh"
+# shellcheck source=../lib/lock.sh
+source "${SCRIPT_DIR}../lib/lock.sh"
 # shellcheck source=../lib/epoch.sh
 source "${SCRIPT_DIR}../lib/epoch.sh"
 
@@ -45,7 +49,8 @@ Watch the detect-only controller NAME. When it decides "fail-over" this script a
   1. raises the epoch in EPOCH_FILE by one (the record that a failover began, written first);
   2. stops the old writer for good (SIGKILL), so it cannot answer a client again;
   3. promotes the standby (promote-standby-to-primary.sh, which also fences the old writer).
-A step that is already done (the standby is not in recovery) is skipped, so a re-run is safe.
+A step already done is skipped, so a re-run is safe. Only one actor acts at a time (the
+maintenance lock; ACTOR_LOCK=off removes it, as a test control).
 It waits up to WAIT_SECONDS (default 120) for the decision, then exits 0 having done nothing.
 
 Environment: EPOCH_FILE (required), ACTOR_CRASH_AFTER (a test hook: none, epoch, kill or promote makes
@@ -58,6 +63,7 @@ USAGE
 # Wait until the controller has decided "fail-over"; succeed if it did, fail on time-out.
 # Usage: wait_for_decision NAME SECONDS
 wait_for_decision() {
+  log INFO 'waiting for the controller to decide'
   local name="${1:?controller name required}"
   local seconds="${2:?seconds required}"
   local waited=0
@@ -99,9 +105,13 @@ crash_point() {
 # resumes the same failover (the same epoch) and skips what is already done.
 # Usage: fail_over EPOCH_FILE
 fail_over() {
+  log INFO 'starting the failover'
   local epoch_file="${1:?epoch file required}"
   local epoch
 
+  if [[ "${ACTOR_LOCK}" == 'on' ]]; then
+    lock::acquire "${REBUILD_MARKER_DIR}" "${SCRIPT_NAME}"
+  fi
   if [[ "$(database::in_recovery "${STANDBY_CONTAINER}")" == 'f' ]]; then
     log INFO "DECISION: ${STANDBY_CONTAINER} is already the writer: nothing to promote"
     epoch::finish "${epoch_file}"
@@ -109,6 +119,7 @@ fail_over() {
   fi
   epoch="$(epoch::begin "${epoch_file}")"
   log INFO "DECISION: failing over at epoch ${epoch}"
+  printf 'failing over at epoch %s\n' "${epoch}"
   crash_point epoch
   stop_old_writer
   crash_point kill

@@ -54,6 +54,21 @@ actor::run() {
     --controller "${ACTOR_CONTROLLER}"
 }
 
+# Run the actor until it finishes, keeping its output in a file instead of the story; ACTOR_LOCK
+# is on or off (off is the negative control of the lock). Fails if the actor fails.
+# Usage: actor::run_captured SCRIPT_DIR EPOCH_FILE LOCK OUTPUT_FILE
+actor::run_captured() {
+  local script_dir="${1-}"
+  local epoch_file="${2:?epoch file required}"
+  local lock="${3:?lock setting required}"
+  local output_file="${4:?output file required}"
+  local -a command=(env "EPOCH_FILE=${epoch_file}" "WAIT_SECONDS=${ACTOR_WAIT_SECONDS}")
+
+  command+=("ACTOR_LOCK=${lock}" bash "${script_dir}act-on-failover.sh")
+  command+=(--controller "${ACTOR_CONTROLLER}")
+  "${command[@]}" > "${output_file}" 2>&1
+}
+
 # Print the milliseconds, counted from STARTED_MS, until a write succeeds on the node (a client's
 # view; a write fails while the node is a replica), or fail after a minute.
 # Usage: actor::time_until_writable NODE STARTED_MS
