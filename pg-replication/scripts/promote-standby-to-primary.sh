@@ -25,8 +25,12 @@ readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 
 # shellcheck source=./runtime.sh
 source "${SCRIPT_DIR}runtime.sh"
+# shellcheck source=../lib/container.sh
+source "${SCRIPT_DIR}../lib/container.sh"
 # shellcheck source=../lib/database.sh
 source "${SCRIPT_DIR}../lib/database.sh"
+# shellcheck source=../lib/fence.sh
+source "${SCRIPT_DIR}../lib/fence.sh"
 # shellcheck source=../lib/lock.sh
 source "${SCRIPT_DIR}../lib/lock.sh"
 
@@ -39,10 +43,9 @@ Promote the standby to primary (manual failover). Refuses to run while the old
 primary is still reachable, because two writable nodes means split-brain. To
 simulate a primary failure first: docker stop pg-primary
 
-The standby is asked to leave recovery (pg_promote, waiting up to 60 seconds),
-then it prints that the standby is out of recovery and its new timeline. The
-guard rail cannot tell a dead primary from one cut off from this machine; real
-split-brain protection needs fencing (planned for Phase 2).
+The standby is asked to leave recovery (pg_promote, waiting up to 60 seconds). Before that the
+old primary is fenced: a standby.signal in its data directory makes any later start, even a
+plain docker start, read-only. A running old primary (--force) is unaffected until it restarts.
 
 Options:
   --force  promote even though the old primary still answers
@@ -136,6 +139,8 @@ main() {
   if [[ "${forced}" == 'no' ]]; then
     check_primary_unreachable
   fi
+  log INFO "DECISION: fencing ${PRIMARY_CONTAINER} before promoting ${STANDBY_CONTAINER}"
+  fence::apply "${PRIMARY_CONTAINER}"
   promote_standby "${forced}"
   report_promotion
 }

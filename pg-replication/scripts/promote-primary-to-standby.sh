@@ -222,7 +222,23 @@ wait_until_streaming() {
     attempt=$(( attempt + 1 ))
     sleep "${STREAM_PAUSE_SECONDS}"
   done
-  die 1 "${PRIMARY_CONTAINER} did not start streaming within ${STREAM_ATTEMPTS} attempts"
+  log WARN "${PRIMARY_CONTAINER} did not start streaming within ${STREAM_ATTEMPTS} attempts"
+  return 1
+}
+
+# A rewound node that will not stream (its history was rewritten more than once) cannot be
+# trusted: stop it and replace its data with a clone, then require that it streams.
+reclone_unless_streaming() {
+  log INFO 'checking that the rebuilt node streams'
+  if wait_until_streaming; then
+    return 0
+  fi
+  log INFO "DECISION: ${PRIMARY_CONTAINER} does not stream after the rewind: cloning it instead"
+  bash "${SCRIPT_DIR}bring-down-database.sh" --database primary
+  clone_old_primary
+  write_standby_settings
+  start_old_primary
+  wait_until_streaming || die 1 "${PRIMARY_CONTAINER} does not stream even after a clone"
 }
 
 # Print the old primary's state: whether it is in recovery (a standby) and who it follows.
@@ -280,7 +296,7 @@ main() {
   rebuild_data_directory "$(choose_method "${requested}")"
   write_standby_settings
   start_old_primary
-  wait_until_streaming
+  reclone_unless_streaming
   clear_rebuild_marker
   report_result
 }
