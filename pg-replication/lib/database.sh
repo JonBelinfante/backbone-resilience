@@ -14,6 +14,8 @@ readonly DATABASE_STREAM_ATTEMPTS=120
 readonly DATABASE_REPLAY_PAUSE_SECONDS=0.5
 readonly DATABASE_LSN_PATTERN='^[0-9A-F]+/[0-9A-F]+$'
 readonly DATABASE_WAL_SIZE_SQL='select (coalesce(sum(size), 0) / 1048576)::int from pg_ls_waldir()'
+readonly DATABASE_HEARTBEAT_FLAG="\"\${HOME}/heartbeat\""
+readonly DATABASE_HEARTBEAT_SQL="select pg_logical_emit_message(true, 'heartbeat', 'x')"
 readonly DATABASE_SLOT_BEHIND='pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)'
 readonly DATABASE_SLOT_LAG_SQL="coalesce(round(${DATABASE_SLOT_BEHIND} / 1048576), -1)"
 
@@ -174,4 +176,27 @@ database::wait_for_streaming() {
     attempt=$(( attempt + 1 ))
     sleep "${DATABASE_REPLAY_PAUSE_SECONDS}"
   done
+}
+
+# Give a writer steady traffic: a small WAL message every second, from inside its container, until
+# database::heartbeat_stop. The traffic stops on its own if the container stops or is frozen.
+# Usage: database::heartbeat_start CONTAINER
+database::heartbeat_start() {
+  local container="${1:?container required}"
+  local program="touch ${DATABASE_HEARTBEAT_FLAG}; while [ -e ${DATABASE_HEARTBEAT_FLAG} ]; do"
+
+  program+=" psql -U postgres -d appdb -Atc \"${DATABASE_HEARTBEAT_SQL}\" > /dev/null"
+  program+='; sleep 1; done'
+
+  log INFO "CHANGE: ${container} gets a heartbeat every second"
+  docker exec --detach "${container}" sh -c "${program}"
+}
+
+# End the heartbeat of database::heartbeat_start (the loop notices within a second).
+# Usage: database::heartbeat_stop CONTAINER
+database::heartbeat_stop() {
+  local container="${1:?container required}"
+
+  log INFO "CHANGE: ${container} loses its heartbeat"
+  docker exec "${container}" sh -c "rm -f ${DATABASE_HEARTBEAT_FLAG}"
 }

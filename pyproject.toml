@@ -46,7 +46,10 @@ max-branches = 10
 [tool.mypy]
 python_version = "3.12"
 strict = true
+mypy_path = "services"
+explicit_package_bases = true
 warn_unused_ignores = true
 
 [tool.pytest.ini_options]
 addopts = "-p no:cacheprovider"
+pythonpath = ["services"]

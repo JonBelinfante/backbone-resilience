@@ -1,7 +1,7 @@
 # script-kind: library
 # Purpose: Inject faults into the database containers, so an experiment can cause a failure.
 # Usage: source "${SCRIPT_DIR}../lib/fault.sh", then call fault::stop_streaming and the others
-# Requires: sleep
+# Requires: docker sleep
 # Depends: container database
 # Exit codes: none (the functions return, or call die of the script that imported them)
 
@@ -75,6 +75,25 @@ fault::crash_node() {
 
   log INFO "CHANGE: ${container} crashes"
   container::kill "${container}"
+}
+
+# Freeze a node: its processes stop but the network stays up, so connections hang instead of
+# failing. This is a hung writer, the hardest kind for a detector (docker pause, SIGSTOP).
+# Usage: fault::freeze_node CONTAINER
+fault::freeze_node() {
+  local container="${1:?container required}"
+
+  log INFO "CHANGE: ${container} is frozen"
+  docker pause "${container}" > /dev/null
+}
+
+# Thaw a node frozen by fault::freeze_node.
+# Usage: fault::thaw_node CONTAINER
+fault::thaw_node() {
+  local container="${1:?container required}"
+
+  log INFO "CHANGE: ${container} is thawed"
+  docker unpause "${container}" > /dev/null
 }
 
 # Partition a node: cut it off the network but keep it running. Writes on the other node continue
