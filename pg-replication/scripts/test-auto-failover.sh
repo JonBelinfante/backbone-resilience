@@ -25,14 +25,8 @@ readonly SCRIPT_NAME="${0##*/}"
 # started by its bare name), so paths to sibling files work however the script is started.
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 readonly TOTAL_STEPS=3
-readonly PROXY_ENDPOINT='toxiproxy:15432'
-readonly CONTROLLER_NAME='auto-controller'
-readonly WITNESS_SECONDS=5
-readonly ACTOR_WAIT=15
-readonly WRITE_LIMIT_SECONDS=60
 readonly RTO_MIN_MS=1000
 readonly RTO_MAX_MS=20000
-readonly SQL_WRITE="select pg_logical_emit_message(true, 'auto-failover', 'x')"
 
 # shellcheck source=./runtime.sh
 source "${SCRIPT_DIR}runtime.sh"
@@ -46,6 +40,8 @@ source "${SCRIPT_DIR}../lib/database.sh"
 source "${SCRIPT_DIR}../lib/fault.sh"
 # shellcheck source=../lib/toxic.sh
 source "${SCRIPT_DIR}../lib/toxic.sh"
+# shellcheck source=../lib/actor.sh
+source "${SCRIPT_DIR}../lib/actor.sh"
 # shellcheck source=../lib/controller.sh
 source "${SCRIPT_DIR}../lib/controller.sh"
 # shellcheck source=../lib/epoch.sh
@@ -79,58 +75,6 @@ begin_step() {
   story::narrate "== Step ${number} of ${TOTAL_STEPS}: ${title} =="
 }
 
-# Give the writer traffic and start a controller watching it through Toxiproxy.
-start_watching() {
-  database::heartbeat_start "${PRIMARY_CONTAINER}"
-  controller::start \
-    "${CONTROLLER_NAME}" \
-    "$(controller::password_file "${SCRIPT_DIR}")" \
-    "${PROXY_ENDPOINT}" \
-    "${WITNESS_SECONDS}"
-  sleep 2
-}
-
-# Stop the controller and the writer's traffic (the writer may be gone already).
-stop_watching() {
-  controller::stop "${CONTROLLER_NAME}"
-  if [[ "$(container::is_running "${PRIMARY_CONTAINER}")" == 'true' ]]; then
-    database::heartbeat_stop "${PRIMARY_CONTAINER}"
-  fi
-}
-
-# Run the actor until it finishes.
-# Usage: run_actor EPOCH_FILE
-run_actor() {
-  local epoch_file="${1:?epoch file required}"
-
-  story::run_logged env \
-    "EPOCH_FILE=${epoch_file}" \
-    "WAIT_SECONDS=${ACTOR_WAIT}" \
-    bash \
-    "${SCRIPT_DIR}act-on-failover.sh" \
-    --controller "${CONTROLLER_NAME}"
-}
-
-# Print the milliseconds until a write succeeds on the standby (a client's view), or fail.
-# Usage: time_until_writable STARTED_MS
-time_until_writable() {
-  local started="${1:?start time required}"
-  local give_up=$(( started + WRITE_LIMIT_SECONDS * 1000 ))
-  local now
-
-  now="$(story::now_milliseconds)"
-  while (( now < give_up )); do
-    if database::bare "${STANDBY_CONTAINER}" <<< "${SQL_WRITE}" > /dev/null 2>&1; then
-      now="$(story::now_milliseconds)"
-      printf '%s\n' "$(( now - started ))"
-      return 0
-    fi
-    sleep 0.2
-    now="$(story::now_milliseconds)"
-  done
-  die 1 "FAIL: no write succeeded on ${STANDBY_CONTAINER} within ${WRITE_LIMIT_SECONDS} s"
-}
-
 # Check the outcome of a failover: epoch 1, the old writer gone, the new one writable.
 # Usage: expect_failed_over EPOCH_FILE
 expect_failed_over() {
@@ -150,15 +94,15 @@ step_short_freeze() {
   local recovery
 
   begin_step 1 'a freeze shorter than the threshold: the actor does nothing'
-  start_watching
+  actor::watch "${PRIMARY_CONTAINER}" "${SCRIPT_DIR}"
   fault::freeze_node "${PRIMARY_CONTAINER}"
   sleep 2
   fault::thaw_node "${PRIMARY_CONTAINER}"
-  run_actor "${epoch_file}"
+  actor::run "${SCRIPT_DIR}" "${epoch_file}" none
   story::expect_equal 'the epoch' "$(epoch::read "${epoch_file}")" 0
   recovery="$(database::in_recovery "${PRIMARY_CONTAINER}")"
   story::expect_equal "${PRIMARY_CONTAINER} in recovery" "${recovery}" f
-  stop_watching
+  actor::unwatch "${PRIMARY_CONTAINER}"
 }
 
 # Steps 2 and 3: break the writer, let the actor act, time the client's view.
@@ -176,17 +120,17 @@ step_break_writer() {
   begin_step "${number}" "${title}"
   story::run_logged bash "${SCRIPT_DIR}restore-starting-state.sh"
   rm -f "${epoch_file}"
-  start_watching
-  run_actor "${epoch_file}" &
+  actor::watch "${PRIMARY_CONTAINER}" "${SCRIPT_DIR}"
+  actor::run "${SCRIPT_DIR}" "${epoch_file}" none &
   pid=$!
   started="$(story::now_milliseconds)"
   "${fault[@]}"
-  elapsed="$(time_until_writable "${started}")"
+  elapsed="$(actor::time_until_writable "${STANDBY_CONTAINER}" "${started}")"
   wait "${pid}" || die 1 'FAIL: the actor failed'
   story::narrate "time from the fault to a successful client write: ${elapsed} ms"
   story::expect_between 'observed RTO (ms)' "${elapsed}" "${RTO_MIN_MS}" "${RTO_MAX_MS}"
   expect_failed_over "${epoch_file}"
-  controller::stop "${CONTROLLER_NAME}"
+  actor::unwatch "${PRIMARY_CONTAINER}"
 }
 
 # Run all the steps in order; the first failure stops the run.
@@ -205,10 +149,10 @@ run_experiment() {
 
 # Remove the controller and heal every fault, whatever happened.
 clean_up_faults() {
-  controller::stop "${CONTROLLER_NAME}"
   if ! fault::thaw_node "${PRIMARY_CONTAINER}" 2> /dev/null; then
     log INFO "${PRIMARY_CONTAINER} was not frozen"
   fi
+  actor::unwatch "${PRIMARY_CONTAINER}"
 }
 
 # Run the steps in a child shell, so a failing step cannot skip the clean-up, then restore.

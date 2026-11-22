@@ -17,6 +17,7 @@ shopt -s inherit_errexit
 readonly PRIMARY_CONTAINER="${PRIMARY_CONTAINER:-pg-primary}"
 readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
 readonly EPOCH_FILE="${EPOCH_FILE:-}"
+readonly ACTOR_CRASH_AFTER="${ACTOR_CRASH_AFTER:-none}"
 readonly WAIT_SECONDS="${WAIT_SECONDS:-120}"
 
 readonly SCRIPT_NAME="${0##*/}"
@@ -47,7 +48,8 @@ Watch the detect-only controller NAME. When it decides "fail-over" this script a
 A step that is already done (the standby is not in recovery) is skipped, so a re-run is safe.
 It waits up to WAIT_SECONDS (default 120) for the decision, then exits 0 having done nothing.
 
-Environment: EPOCH_FILE (required), PRIMARY_CONTAINER, STANDBY_CONTAINER, WAIT_SECONDS, RUN_LOG_DIR.
+Environment: EPOCH_FILE (required), ACTOR_CRASH_AFTER (a test hook: none, epoch, kill or promote makes
+the script SIGKILL itself after that step), PRIMARY_CONTAINER, STANDBY_CONTAINER, WAIT_SECONDS, RUN_LOG_DIR.
 
 Exit codes: 0 acted or nothing to do, 1 failure, 2 usage or configuration error
 USAGE
@@ -82,20 +84,37 @@ stop_old_writer() {
   fi
 }
 
-# Do the failover: epoch first, then the old writer, then the promotion.
+# Test hook: SIGKILL this script right after the named step, as a crash would.
+# Usage: crash_point STEP
+crash_point() {
+  local step="${1:?step required}"
+
+  if [[ "${ACTOR_CRASH_AFTER}" == "${step}" ]]; then
+    log WARN "test hook: crashing after the ${step} step"
+    kill -KILL "$$"
+  fi
+}
+
+# Do the failover: epoch first, then the old writer, then the promotion. A re-run after a crash
+# resumes the same failover (the same epoch) and skips what is already done.
 # Usage: fail_over EPOCH_FILE
 fail_over() {
   local epoch_file="${1:?epoch file required}"
   local epoch
 
   if [[ "$(database::in_recovery "${STANDBY_CONTAINER}")" == 'f' ]]; then
-    log INFO "DECISION: ${STANDBY_CONTAINER} is already the writer: nothing to do"
+    log INFO "DECISION: ${STANDBY_CONTAINER} is already the writer: nothing to promote"
+    epoch::finish "${epoch_file}"
     return 0
   fi
-  epoch="$(epoch::advance "${epoch_file}")"
+  epoch="$(epoch::begin "${epoch_file}")"
   log INFO "DECISION: failing over at epoch ${epoch}"
+  crash_point epoch
   stop_old_writer
+  crash_point kill
   bash "${SCRIPT_DIR}promote-standby-to-primary.sh"
+  crash_point promote
+  epoch::finish "${epoch_file}"
   log INFO "DECISION: ${STANDBY_CONTAINER} is the writer at epoch ${epoch}"
 }
 
