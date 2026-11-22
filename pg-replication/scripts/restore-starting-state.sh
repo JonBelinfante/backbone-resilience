@@ -49,10 +49,10 @@ round-trip test run it. It reads the current roles and decides:
   one node stopped, the other fine  start the stopped node
   standby cannot start or is not    rebuild it: empty it and copy the primary
     streaming
+  primary replica, standby writer   rebuild the primary from the writer, then fail back
   standby is the writer             fail back: rebuild the primary as its standby, stop
                                     the standby, promote the primary, rebuild the standby
-Any other combination is refused. Failing back under asynchronous replication can lose
-writes the new writer had not yet sent to the node being promoted.
+Any other combination is refused. Failing back under async replication can lose writes.
 
 Environment:
   PRIMARY_CONTAINER  the node that should be the writer (default: pg-primary)
@@ -187,8 +187,13 @@ restore_starting_state() {
     stopped/replica)
       bash "${SCRIPT_DIR}bring-up-database.sh" --database primary
       ;;
-    stopped/writer | replica/writer | replica/stopped)
+    stopped/writer | replica/stopped)
       fail_back "${primary_role}"
+      ;;
+    replica/writer)
+      log INFO 'DECISION: the primary is a replica of unknown history: rebuilding it first'
+      bash "${SCRIPT_DIR}bring-down-database.sh" --database primary
+      fail_back stopped
       ;;
     *)
       die 1 "cannot restore from roles ${primary_role}/${standby_role}: repair by hand"
