@@ -19,6 +19,8 @@ readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
 readonly EPOCH_FILE="${EPOCH_FILE:-}"
 readonly REBUILD_MARKER_DIR="${REBUILD_MARKER_DIR:-${TMPDIR:-/tmp}}"
 readonly FENCE_WAIT_SECONDS="${FENCE_WAIT_SECONDS:-0}"
+readonly LEASE_TTL_SECONDS="${LEASE_TTL_SECONDS:-0}"
+readonly CONTROLLER_WRITER_ENDPOINT="${CONTROLLER_WRITER_ENDPOINT:-toxiproxy:15433}"
 readonly ACTOR_LOCK="${ACTOR_LOCK:-on}"
 readonly ACTOR_CRASH_AFTER="${ACTOR_CRASH_AFTER:-none}"
 readonly WAIT_SECONDS="${WAIT_SECONDS:-120}"
@@ -36,6 +38,8 @@ source "${SCRIPT_DIR}../lib/container.sh"
 source "${SCRIPT_DIR}../lib/database.sh"
 # shellcheck source=../lib/controller.sh
 source "${SCRIPT_DIR}../lib/controller.sh"
+# shellcheck source=../lib/lease.sh
+source "${SCRIPT_DIR}../lib/lease.sh"
 # shellcheck source=../lib/lock.sh
 source "${SCRIPT_DIR}../lib/lock.sh"
 # shellcheck source=../lib/epoch.sh
@@ -57,7 +61,10 @@ It waits up to WAIT_SECONDS (default 120) for the decision, then exits 0 having 
 Where the old writer cannot be reached to be killed, set FENCE_WAIT_SECONDS to its lease time plus a
 margin: the actor then waits that long for the writer's guard to stop it, and promotes with --force.
 
-Environment: EPOCH_FILE (required), FENCE_WAIT_SECONDS, ACTOR_CRASH_AFTER (a test hook: none, epoch, kill or promote makes
+With LEASE_TTL_SECONDS set, the new writer gets a lease at the new epoch and a guard, and the
+controller is restarted to watch it (CONTROLLER_WRITER_ENDPOINT, default toxiproxy:15433).
+
+Environment: EPOCH_FILE (required), FENCE_WAIT_SECONDS, LEASE_TTL_SECONDS, ACTOR_CRASH_AFTER (a test hook: none, epoch, kill or promote makes
 the script SIGKILL itself after that step), PRIMARY_CONTAINER, STANDBY_CONTAINER, WAIT_SECONDS, RUN_LOG_DIR.
 
 Exit codes: 0 acted or nothing to do, 1 failure, 2 usage or configuration error
@@ -109,6 +116,32 @@ promote_standby() {
   "${command[@]}"
 }
 
+# Give the new writer its lease at the new epoch, put a guard beside it, and point the controller at
+# it (the old writer's guard and controller go). Safe to repeat. Does nothing without a lease time.
+# Usage: hand_over_lease EPOCH CONTROLLER
+hand_over_lease() {
+  local epoch="${1:?epoch required}"
+  local controller="${2:?controller name required}"
+  local login
+
+  if (( LEASE_TTL_SECONDS == 0 )); then
+    return 0
+  fi
+  log INFO "DECISION: handing the lease to ${STANDBY_CONTAINER} at epoch ${epoch}"
+  login="$(controller::password_file "${SCRIPT_DIR}")"
+  lease::install "${STANDBY_CONTAINER}" "${epoch}" "${LEASE_TTL_SECONDS}"
+  lease::guard_stop "${PRIMARY_CONTAINER}"
+  lease::guard_start "${STANDBY_CONTAINER}" "${login}"
+  controller::stop "${controller}"
+  controller::start \
+    "${controller}" \
+    "${login}" \
+    "${CONTROLLER_WRITER_ENDPOINT}" \
+    5 \
+    "STANDBY_HOST=${PRIMARY_CONTAINER}" \
+    "LEASE_TTL_SECONDS=${LEASE_TTL_SECONDS}"
+}
+
 # Test hook: SIGKILL this script right after the named step, as a crash would.
 # Usage: crash_point STEP
 crash_point() {
@@ -122,10 +155,11 @@ crash_point() {
 
 # Do the failover: epoch first, then the old writer, then the promotion. A re-run after a crash
 # resumes the same failover (the same epoch) and skips what is already done.
-# Usage: fail_over EPOCH_FILE
+# Usage: fail_over EPOCH_FILE CONTROLLER
 fail_over() {
   log INFO 'starting the failover'
   local epoch_file="${1:?epoch file required}"
+  local controller="${2:?controller name required}"
   local epoch
 
   if [[ "${ACTOR_LOCK}" == 'on' ]]; then
@@ -133,6 +167,9 @@ fail_over() {
   fi
   if [[ "$(database::in_recovery "${STANDBY_CONTAINER}")" == 'f' ]]; then
     log INFO "DECISION: ${STANDBY_CONTAINER} is already the writer: nothing to promote"
+    if epoch::is_unfinished "${epoch_file}"; then
+      hand_over_lease "$(epoch::read "${epoch_file}")" "${controller}"
+    fi
     epoch::finish "${epoch_file}"
     return 0
   fi
@@ -144,6 +181,7 @@ fail_over() {
   crash_point kill
   promote_standby
   crash_point promote
+  hand_over_lease "${epoch}" "${controller}"
   epoch::finish "${epoch_file}"
   log INFO "DECISION: ${STANDBY_CONTAINER} is the writer at epoch ${epoch}"
 }
@@ -155,6 +193,7 @@ check_environment() {
   fi
   require_integer WAIT_SECONDS "${WAIT_SECONDS}"
   require_integer FENCE_WAIT_SECONDS "${FENCE_WAIT_SECONDS}"
+  require_integer LEASE_TTL_SECONDS "${LEASE_TTL_SECONDS}"
 }
 
 # Script entry point.
@@ -194,7 +233,7 @@ main() {
     log INFO "no fail-over decision within ${WAIT_SECONDS} s: nothing done"
     return 0
   fi
-  fail_over "${EPOCH_FILE}"
+  fail_over "${EPOCH_FILE}" "${controller}"
 }
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR

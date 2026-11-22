@@ -58,20 +58,12 @@ lease::seconds_left() {
   database::bare "${container}" <<< "${sql}"
 }
 
-# Start a guard in the writer's network namespace, so cutting the writer off the network cuts the
-# guard off too. It stops the writer once the lease has run out.
-# Usage: lease::guard_start CONTAINER LOGIN_PATH
-lease::guard_start() {
+# Print the epoch of the writer's lease.
+# Usage: lease::epoch CONTAINER
+lease::epoch() {
   local container="${1:?container required}"
-  local login_path="${2:?login path required}"
-  local -a command=(docker run --detach --name "${LEASE_GUARD_PREFIX}${container}")
 
-  command+=(--network "container:${container}")
-  command+=(--volume "${login_path}:/run/secrets/pg-password:ro")
-  command+=(--env PASSWORD_FILE=/run/secrets/pg-password)
-  command+=("${LEASE_GUARD_IMAGE}")
-  log INFO "CHANGE: starting a lease guard beside ${container}"
-  "${command[@]}" > /dev/null
+  database::bare "${container}" <<< 'select epoch from fence_lease where id = 1'
 }
 
 # Remove the guard beside a writer; succeeds if there is none.
@@ -83,6 +75,33 @@ lease::guard_stop() {
   if ! docker rm --force "${LEASE_GUARD_PREFIX}${container}" > /dev/null 2>&1; then
     log INFO "there was no guard beside ${container}"
   fi
+}
+
+# Print the milliseconds the writer's lease has left (negative once it ran out).
+# Usage: lease::milliseconds_left CONTAINER
+lease::milliseconds_left() {
+  local container="${1:?container required}"
+  local sql='select round(extract(epoch from expires_at - clock_timestamp()) * 1000)::int'
+
+  sql+=' from fence_lease where id = 1'
+  database::bare "${container}" <<< "${sql}"
+}
+
+# Start a guard (replacing any there is) in the writer's network namespace, so cutting the writer
+# off the network cuts the guard off too. It stops the writer once the lease has run out.
+# Usage: lease::guard_start CONTAINER LOGIN_PATH
+lease::guard_start() {
+  local container="${1:?container required}"
+  local login_path="${2:?login path required}"
+  local -a command=(docker run --detach --name "${LEASE_GUARD_PREFIX}${container}")
+
+  command+=(--network "container:${container}")
+  command+=(--volume "${login_path}:/run/secrets/pg-password:ro")
+  command+=(--env PASSWORD_FILE=/run/secrets/pg-password)
+  command+=("${LEASE_GUARD_IMAGE}")
+  lease::guard_stop "${container}"
+  log INFO "CHANGE: starting a lease guard beside ${container}"
+  "${command[@]}" > /dev/null
 }
 
 # Print the guard's log lines about decisions.

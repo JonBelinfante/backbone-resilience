@@ -12,6 +12,11 @@ readonly ACTOR_WAIT_SECONDS=15
 readonly ACTOR_WRITE_LIMIT_SECONDS=60
 readonly ACTOR_WRITE_SQL="select pg_logical_emit_message(true, 'auto-failover', 'x')"
 
+# Print the name the controller runs under.
+actor::controller_name() {
+  printf '%s\n' "${ACTOR_CONTROLLER}"
+}
+
 # Give the writer traffic and start a controller that watches it through Toxiproxy.
 # Further arguments, NAME=VALUE, go to the controller (for example LEASE_TTL_SECONDS=6).
 # Usage: actor::watch WRITER_CONTAINER SCRIPT_DIR [NAME=VALUE ...]

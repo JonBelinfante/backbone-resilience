@@ -60,3 +60,11 @@ epoch::finish() {
 
   rm -f "${file}.pending"
 }
+
+# Succeed if a failover begun by epoch::begin has not been finished.
+# Usage: epoch::is_unfinished FILE
+epoch::is_unfinished() {
+  local file="${1:?epoch file required}"
+
+  [[ -e "${file}.pending" ]]
+}
