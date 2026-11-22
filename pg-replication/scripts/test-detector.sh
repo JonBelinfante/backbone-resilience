@@ -84,24 +84,6 @@ begin_step() {
   story::narrate "== Step ${number} of ${TOTAL_STEPS}: ${title} =="
 }
 
-# Print the secret file's absolute path (docker needs one to mount it).
-password_file() {
-  if [[ "${SCRIPT_DIR}" == /* ]]; then
-    printf '%s../secrets/pg-password.txt\n' "${SCRIPT_DIR}"
-  else
-    printf '%s/%s../secrets/pg-password.txt\n' "${PWD}" "${SCRIPT_DIR}"
-  fi
-}
-
-# Print the time as whole milliseconds since the epoch.
-now_milliseconds() {
-  local now="${EPOCHREALTIME}"
-  local whole="${now%%[.,]*}"
-  local fraction="${now#*[.,]}"
-
-  printf '%s\n' "$(( whole * 1000 + 10#${fraction:0:3} ))"
-}
-
 # Give the writer traffic (a heartbeat message every second) and say so.
 start_heartbeat() {
   story::narrate 'the writer now has traffic: a heartbeat message every second'
@@ -120,7 +102,11 @@ start_controller() {
   local name="${1:?name required}"
   local window="${2:?witness seconds required}"
 
-  controller::start "${name}" "$(password_file)" "${PROXY_ENDPOINT}" "${window}"
+  controller::start \
+    "${name}" \
+    "$(controller::password_file "${SCRIPT_DIR}")" \
+    "${PROXY_ENDPOINT}" \
+    "${window}"
   sleep 2
 }
 
@@ -187,7 +173,7 @@ step_long_freeze() {
 
   begin_step 3 'a hung writer is detected: fail-over after the threshold'
   start_controller detector-long "${WITNESS_SHORT}"
-  started="$(now_milliseconds)"
+  started="$(story::now_milliseconds)"
   fault::freeze_node "${PRIMARY_CONTAINER}"
   decided="$(wait_for_verdict detector-long fail-over)"
   fault::thaw_node "${PRIMARY_CONTAINER}"
@@ -272,7 +258,7 @@ step_crash() {
   begin_step 7 'a crashed writer is detected: fail-over'
   start_heartbeat
   start_controller detector-crash "${WITNESS_SHORT}"
-  started="$(now_milliseconds)"
+  started="$(story::now_milliseconds)"
   fault::crash_node "${PRIMARY_CONTAINER}"
   decided="$(wait_for_verdict detector-crash fail-over)"
   narrate_decisions detector-crash

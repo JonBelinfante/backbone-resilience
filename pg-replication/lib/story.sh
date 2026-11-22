@@ -119,3 +119,12 @@ story::expect_between() {
   fi
   story::narrate "PASS: ${label}: ${value} (limits ${low} to ${high})"
 }
+
+# Print the time as whole milliseconds since the epoch.
+story::now_milliseconds() {
+  local now="${EPOCHREALTIME}"
+  local whole="${now%%[.,]*}"
+  local fraction="${now#*[.,]}"
+
+  printf '%s\n' "$(( whole * 1000 + 10#${fraction:0:3} ))"
+}

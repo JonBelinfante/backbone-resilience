@@ -106,3 +106,15 @@ controller::first_time() {
     fi
   done <<< "${decisions}"
 }
+
+# Print the superuser password file's absolute path (docker needs one to mount it).
+# Usage: controller::password_file SCRIPT_DIR
+controller::password_file() {
+  local script_dir="${1-}"
+
+  if [[ "${script_dir}" == /* ]]; then
+    printf '%s../secrets/pg-password.txt\n' "${script_dir}"
+  else
+    printf '%s/%s../secrets/pg-password.txt\n' "${PWD}" "${script_dir}"
+  fi
+}
