@@ -122,3 +122,27 @@ actor::watch_writes() {
   done
   printf '%s %s\n' "${last_ok}" "${first_fail}"
 }
+
+# Print yes if the node's container is running, no if not.
+# Usage: actor::running_word NODE
+actor::running_word() {
+  local node="${1:?node required}"
+
+  if [[ "$(container::is_running "${node}")" == 'true' ]]; then
+    printf 'yes\n'
+  else
+    printf 'no\n'
+  fi
+}
+
+# Print yes if the epoch file records an unfinished failover, no if not.
+# Usage: actor::pending_word EPOCH_FILE
+actor::pending_word() {
+  local epoch_file="${1:?epoch file required}"
+
+  if [[ -e "${epoch_file}.pending" ]]; then
+    printf 'yes\n'
+  else
+    printf 'no\n'
+  fi
+}

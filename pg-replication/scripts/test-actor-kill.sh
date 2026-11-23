@@ -62,30 +62,6 @@ Exit codes: 0 every step passed, 1 a step failed, 2 usage or configuration error
 USAGE
 }
 
-# Print yes if the node's container is running, no if not.
-# Usage: running_word NODE
-running_word() {
-  local node="${1:?node required}"
-
-  if [[ "$(container::is_running "${node}")" == 'true' ]]; then
-    printf 'yes\n'
-  else
-    printf 'no\n'
-  fi
-}
-
-# Print yes if the epoch file records an unfinished failover, no if not.
-# Usage: pending_word EPOCH_FILE
-pending_word() {
-  local epoch_file="${1:?epoch file required}"
-
-  if [[ -e "${epoch_file}.pending" ]]; then
-    printf 'yes\n'
-  else
-    printf 'no\n'
-  fi
-}
-
 # Check the half-done state after a kill: the epoch is spent and the failover is unfinished, and
 # what is done depends on the step: epoch (old writer still alive), kill (old writer gone, standby
 # still a replica), promote (standby already writable).
@@ -100,8 +76,9 @@ expect_half_done() {
   [[ "${point}" != 'epoch' ]] || old_alive='yes'
   [[ "${point}" != 'promote' ]] || recovery='f'
   story::expect_equal 'the epoch' "$(epoch::read "${epoch_file}")" 1
-  story::expect_equal 'an unfinished failover is recorded' "$(pending_word "${epoch_file}")" yes
-  actual="$(running_word "${PRIMARY_CONTAINER}")"
+  actual="$(actor::pending_word "${epoch_file}")"
+  story::expect_equal 'an unfinished failover is recorded' "${actual}" yes
+  actual="$(actor::running_word "${PRIMARY_CONTAINER}")"
   story::expect_equal 'the old writer is running' "${actual}" "${old_alive}"
   actual="$(database::in_recovery "${STANDBY_CONTAINER}")"
   story::expect_equal 'the standby is in recovery' "${actual}" "${recovery}"
@@ -113,8 +90,8 @@ expect_finished() {
   local epoch_file="${1:?epoch file required}"
 
   story::expect_equal 'the epoch is still' "$(epoch::read "${epoch_file}")" 1
-  story::expect_equal 'no unfinished failover' "$(pending_word "${epoch_file}")" no
-  story::expect_equal 'the old writer is running' "$(running_word "${PRIMARY_CONTAINER}")" no
+  story::expect_equal 'no unfinished failover' "$(actor::pending_word "${epoch_file}")" no
+  story::expect_equal 'the old writer is running' "$(actor::running_word "${PRIMARY_CONTAINER}")" no
   story::expect_equal 'the standby is in recovery' \
     "$(database::in_recovery "${STANDBY_CONTAINER}")" \
     f

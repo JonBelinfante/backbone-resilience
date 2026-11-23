@@ -64,7 +64,7 @@ margin: the actor then waits that long for the writer's guard to stop it, and pr
 With LEASE_TTL_SECONDS set, the new writer gets a lease at the new epoch and a guard, and the
 controller is restarted to watch it (CONTROLLER_WRITER_ENDPOINT, default toxiproxy:15433).
 
-Environment: EPOCH_FILE (required), FENCE_WAIT_SECONDS, LEASE_TTL_SECONDS, ACTOR_CRASH_AFTER (a test hook: none, epoch, kill or promote makes
+Environment: EPOCH_FILE (required), FENCE_WAIT_SECONDS, LEASE_TTL_SECONDS, ACTOR_CRASH_AFTER (a test hook: none, epoch, kill, promote or handover makes
 the script SIGKILL itself after that step), PRIMARY_CONTAINER, STANDBY_CONTAINER, WAIT_SECONDS, RUN_LOG_DIR.
 
 Exit codes: 0 acted or nothing to do, 1 failure, 2 usage or configuration error
@@ -116,6 +116,17 @@ promote_standby() {
   "${command[@]}"
 }
 
+# Test hook: SIGKILL this script right after the named step, as a crash would.
+# Usage: crash_point STEP
+crash_point() {
+  local step="${1:?step required}"
+
+  if [[ "${ACTOR_CRASH_AFTER}" == "${step}" ]]; then
+    log WARN "test hook: crashing after the ${step} step"
+    kill -KILL "$$"
+  fi
+}
+
 # Give the new writer its lease at the new epoch, put a guard beside it, and point the controller at
 # it (the old writer's guard and controller go). Safe to repeat. Does nothing without a lease time.
 # Usage: hand_over_lease EPOCH CONTROLLER
@@ -130,6 +141,7 @@ hand_over_lease() {
   log INFO "DECISION: handing the lease to ${STANDBY_CONTAINER} at epoch ${epoch}"
   login="$(controller::password_file "${SCRIPT_DIR}")"
   lease::install "${STANDBY_CONTAINER}" "${epoch}" "${LEASE_TTL_SECONDS}"
+  crash_point handover
   lease::guard_stop "${PRIMARY_CONTAINER}"
   lease::guard_start "${STANDBY_CONTAINER}" "${login}"
   controller::stop "${controller}"
@@ -140,17 +152,6 @@ hand_over_lease() {
     5 \
     "STANDBY_HOST=${PRIMARY_CONTAINER}" \
     "LEASE_TTL_SECONDS=${LEASE_TTL_SECONDS}"
-}
-
-# Test hook: SIGKILL this script right after the named step, as a crash would.
-# Usage: crash_point STEP
-crash_point() {
-  local step="${1:?step required}"
-
-  if [[ "${ACTOR_CRASH_AFTER}" == "${step}" ]]; then
-    log WARN "test hook: crashing after the ${step} step"
-    kill -KILL "$$"
-  fi
 }
 
 # Do the failover: epoch first, then the old writer, then the promotion. A re-run after a crash

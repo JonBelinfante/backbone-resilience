@@ -2,7 +2,7 @@
 # script-kind: executable
 # Purpose: Test that after a failover the new writer holds a lease, kept alive, and is fenced by it.
 # Usage: test-lease-handover.sh [-h | --help]
-# Requires: cat mktemp sleep
+# Requires: cat mktemp rm sleep
 # Exit codes: 0 every step passed, 1 a step failed, 2 usage or configuration error
 
 set -Eeuo pipefail
@@ -24,7 +24,7 @@ readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
 # started by its bare name), so paths to sibling files work however the script is started.
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
-readonly TOTAL_STEPS=2
+readonly TOTAL_STEPS=3
 readonly LEASE_TTL=6
 readonly FENCE_WAIT=8
 readonly SAMPLES=4
@@ -58,7 +58,9 @@ actor handing the lease on. Steps:
   1. the new writer holds a lease at the new epoch (1), and over a period longer than the lease
      time it is renewed every time we look: the controller now follows the new writer;
   2. the new controller is removed, so the lease is not renewed: the new writer's guard stops it
-     within the lease time plus a margin. The new writer is fenced as the old one was.
+     within the lease time plus a margin. The new writer is fenced as the old one was;
+  3. the same failover with the actor killed in the middle of the hand-over (after the lease is
+     written, before the guard and controller): running it again completes the hand-over.
 It stops at the first FAIL, then restores the starting state. Throwaway stack only.
 
 Environment: PRIMARY_CONTAINER, STANDBY_CONTAINER, TEMP_DIR, RUN_LOG_DIR.
@@ -76,10 +78,12 @@ begin_step() {
   story::narrate "== Step ${number} of ${TOTAL_STEPS}: ${title} =="
 }
 
-# Lease, guard, controller on the old writer; then isolate it and let the actor fail over.
-# Usage: fail_over_isolated EPOCH_FILE
+# Lease, guard, controller on the old writer; then isolate it and let the actor fail over. The
+# actor is killed at CRASH_POINT (none for no kill); then it is run again until it finishes.
+# Usage: fail_over_isolated EPOCH_FILE CRASH_POINT
 fail_over_isolated() {
   local epoch_file="${1:?epoch file required}"
+  local crash_point="${2:?crash point required}"
   local pid
 
   story::run_logged bash "${SCRIPT_DIR}restore-starting-state.sh"
@@ -89,23 +93,32 @@ fail_over_isolated() {
   actor::run \
     "${SCRIPT_DIR}" \
     "${epoch_file}" \
-    none \
+    "${crash_point}" \
     "FENCE_WAIT_SECONDS=${FENCE_WAIT}" \
     "LEASE_TTL_SECONDS=${LEASE_TTL}" &
   pid=$!
 
   fault::isolate_node "${PRIMARY_CONTAINER}"
-  wait "${pid}" || die 1 'FAIL: the actor failed'
+  if wait "${pid}"; then
+    [[ "${crash_point}" == 'none' ]] || die 1 "FAIL: the actor was not killed at ${crash_point}"
+    return 0
+  fi
+  [[ "${crash_point}" != 'none' ]] || die 1 'FAIL: the actor failed'
+  story::narrate "the actor was killed after the ${crash_point} step; running it again"
+  actor::run \
+    "${SCRIPT_DIR}" \
+    "${epoch_file}" \
+    none \
+    "FENCE_WAIT_SECONDS=${FENCE_WAIT}" \
+    "LEASE_TTL_SECONDS=${LEASE_TTL}"
 }
 
-# Step 1: the new writer has a lease at epoch 1 that stays renewed beyond one lease time.
-step_handed_over() {
-  local epoch_file="${1:?epoch file required}"
+# Check that the new writer holds the lease at epoch 1 and that it stays renewed for longer than
+# one lease time.
+check_new_writer_lease() {
   local left
   local sample=1
 
-  begin_step 1 'the actor hands the lease to the new writer, and the controller keeps it alive'
-  fail_over_isolated "${epoch_file}"
   story::expect_equal 'epoch of the new writer lease' "$(lease::epoch "${STANDBY_CONTAINER}")" 1
   while (( sample <= SAMPLES )); do
     left="$(lease::milliseconds_left "${STANDBY_CONTAINER}")"
@@ -116,6 +129,16 @@ step_handed_over() {
     sample=$(( sample + 1 ))
     sleep 3
   done
+}
+
+# Step 1: the new writer has a lease at epoch 1 that stays renewed beyond one lease time.
+# Usage: step_handed_over EPOCH_FILE
+step_handed_over() {
+  local epoch_file="${1:?epoch file required}"
+
+  begin_step 1 'the actor hands the lease to the new writer, and the controller keeps it alive'
+  fail_over_isolated "${epoch_file}" none
+  check_new_writer_lease
 }
 
 # Step 2: without renewals the new writer is stopped by its own guard.
@@ -140,20 +163,6 @@ step_new_writer_fenced() {
   story::expect_stopped "${STANDBY_CONTAINER}"
 }
 
-# Run all the steps in order; the first failure stops the run.
-# Usage: run_experiment EPOCH_FILE
-run_experiment() {
-  local epoch_file="${1:?epoch file required}"
-
-  story::narrate 'story: the new writer gets a lease after a failover'
-  story::run_logged bash "${SCRIPT_DIR}restore-starting-state.sh"
-  controller::build "${SCRIPT_DIR}"
-  lease::build "${SCRIPT_DIR}"
-  step_handed_over "${epoch_file}"
-  step_new_writer_fenced
-  story::narrate "PASS: all ${TOTAL_STEPS} steps passed"
-}
-
 # Stop a node left running, as a failover would, so the restore can run.
 # Usage: stop_node_left_running NODE
 stop_node_left_running() {
@@ -176,6 +185,33 @@ clean_up_and_restore() {
   fi
   story::run_logged bash "${SCRIPT_DIR}restore-starting-state.sh"
   lease::remove "${PRIMARY_CONTAINER}"
+}
+
+# Step 3: the actor is killed in the middle of the hand-over; running it again completes it.
+# Usage: step_killed_during_handover EPOCH_FILE
+step_killed_during_handover() {
+  local epoch_file="${1:?epoch file required}"
+
+  begin_step 3 'the actor is killed in the middle of the hand-over and run again'
+  clean_up_and_restore
+  rm -f "${epoch_file}" "${epoch_file}.pending"
+  fail_over_isolated "${epoch_file}" handover
+  check_new_writer_lease
+}
+
+# Run all the steps in order; the first failure stops the run.
+# Usage: run_experiment EPOCH_FILE
+run_experiment() {
+  local epoch_file="${1:?epoch file required}"
+
+  story::narrate 'story: the new writer gets a lease after a failover'
+  story::run_logged bash "${SCRIPT_DIR}restore-starting-state.sh"
+  controller::build "${SCRIPT_DIR}"
+  lease::build "${SCRIPT_DIR}"
+  step_handed_over "${epoch_file}"
+  step_new_writer_fenced
+  step_killed_during_handover "${epoch_file}"
+  story::narrate "PASS: all ${TOTAL_STEPS} steps passed"
 }
 
 # Run the steps in a child shell, so a failing step cannot skip the clean-up, then restore.
@@ -219,7 +255,7 @@ main() {
   done
 
   (( $# == 0 )) || die 2 "unexpected argument: ${1} (try --help)"
-  require_commands cat mktemp sleep
+  require_commands cat mktemp rm sleep
   epoch_dir="$(mktemp -d "${TEMP_DIR}/failover-epoch.XXXXXX")"
   CLEANUP_PATHS+=("${epoch_dir}")
   run_and_restore "${epoch_dir}/epoch"
