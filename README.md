@@ -33,6 +33,7 @@ anyone who wants a worked example of turning an availability claim into a test.
 |---|---|
 | A **capability catalogue**: each resilience problem, its mechanism, the test, the measured result and the limit | [docs/capability-catalogue.md](docs/capability-catalogue.md) |
 | A **capability register**: 52 capabilities, each with status, evidence and limits, plus the open gaps | [pg-replication/capability-register.md](pg-replication/capability-register.md) |
+| An **evidence log**: the commands, numbers and defects found in each run of experiments | [pg-replication/evidence-log.md](pg-replication/evidence-log.md) |
 | **Runnable tests and experiments** (20 test scripts and a measurement runner), each restoring the starting state | [pg-replication/](pg-replication/README.md) |
 | **RPO and RTO measurements** with a report | [pg-replication/docs/recovery-report.md](pg-replication/docs/recovery-report.md) |
 | **Robustness patterns** (guards, verify-after-act, decisions read the writer) and diagrams | [pg-replication/docs/patterns/](pg-replication/docs/patterns/README.md) |

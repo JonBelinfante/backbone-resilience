@@ -3,7 +3,7 @@
 This is the learning guide to the repository. Each entry names a **problem** a database platform meets when something
 fails, the **mechanism** that answers it, the **test** you can run to see it work, the **result** we measured, and the
 **limit** of the evidence. Every claim here is backed by a row in the
-[capability register](../pg-replication/capability-register.md), which holds the full evidence logs.
+[capability register](../pg-replication/capability-register.md), which holds the status and limits; the commands and numbers of each run are in the [evidence log](../pg-replication/evidence-log.md).
 
 All measurements come from one laptop (Docker Compose, PostgreSQL 16, two nodes on one host). They show how each
 mechanism behaves and what it costs. They are not production figures: a real network, disk and fleet will differ.
