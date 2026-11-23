@@ -15,6 +15,12 @@ Code references name a **function**, not a line number, so they survive edits. C
 | [Split-brain guard](split-brain-guard.md) | A node restarted after failover comes back as a second writer | FOV-03 (manual) |
 | [Decisions read the writer](decisions-read-the-writer.md) | A decision made on a lagging replica approves what the writer would refuse | DEC-01 (auto) |
 | [Verify after act](verify-after-act.md) | An action reports success, but the data or state has not changed yet | REP-01 (auto), FOV-05, FOV-07 |
+| [Epoch (fencing token)](epoch-fencing-token.md) | A failover needs an ordering, and an interrupted one must not count twice | ACT-02, ACT-04 (auto) |
+| [Lease and guard](lease-and-guard.md) | A partitioned writer that cannot be killed keeps taking writes | LEASE-01 to 03, CTL-01 (auto) |
+| [Restartable actor](restartable-actor.md) | The program doing the failover can itself crash half way | ACT-02 to 04 (auto) |
+| [Witness detector](witness-detector.md) | One observer cannot tell a dead writer from its own blindness | DET-01 (auto) |
+| [Negative control](negative-control.md) | A test that passes may not have been able to fail | the controls in RPO-02, LEASE-02, FOV-10, ACT-03, DET-01, DEC-01 |
+| [Kill-test harness](kill-test-harness.md) | Recovery code works only from the clean states you thought of | FOV-08, SEC-R3, ACT-04 (auto) |
 
 ## Related guide
 

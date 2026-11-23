@@ -41,7 +41,7 @@ A failed-over old primary returning as a writer, through the project's own start
 ## Limits
 
 - **It applies only when a node is started through `bring-up-database.sh`.** A plain `docker start pg-primary`
-  bypasses it. This is gap GAP-03.
+  bypasses it. That start is now fenced (FOV-10, test-fencing.sh): the node comes up read-only. A node that keeps running is handled by the [lease and guard](lease-and-guard.md).
 - **It is a snapshot.** Both nodes could become writable a moment after the check. Fencing is the real protection.
 - **If the peer is not running, the guard passes.** That is correct (one writer at most), but it means a node can
   come up as a writer alone. The restore script exists to correct that case.

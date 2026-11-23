@@ -1,4 +1,18 @@
-# Phase 1: two Postgres nodes kept in sync by WAL streaming
+# Phases 1 and 2: two Postgres nodes, WAL streaming, and failover safety
+
+New here? Start with the [repository README](../README.md) and the [capability catalogue](../docs/capability-catalogue.md); this file is the working reference for the scripts.
+
+## Where this sits in the roadmap
+
+| Phase | Scope | State |
+|---|---|---|
+| 1 | The Postgres pair: replication (sync/async), manual failover and fail-back, RPO/RTO, crash and network faults, secret rotation | Complete |
+| 2 | Failover safety (detector, epoch, actor, leases and guards) and the application layer (GAP-12: outbox, idempotent consumers, checker) | Failover safety built, proven and documented as patterns; remainder GAP-03, GAP-07, GAP-11; application layer not started |
+| 3 | Service layer: load generator, reconnecting clients (GAP-10), RTO under load (GAP-15), rotation for application clients (SEC-06) | Not started |
+| 4 to 6 | Hot-hot with partitioned ownership; multi-writer for commutative entries; chaos catalogue with SLI/error-budget reporting | Not started |
+
+This folder holds the Phase 1 foundation and the Phase 2 failover work. What is proven and what is not is in
+[capability-register.md](capability-register.md).
 
 `pg-primary` (localhost:5433) accepts writes. `pg-standby` (localhost:5434) is a hot standby: it clones the
 primary on first start, then streams and replays the primary's write-ahead log (WAL). It serves read-only queries.
@@ -59,6 +73,10 @@ superuser password would otherwise be open to the whole network.
 | `show-container-info.sh --database primary\|standby` / `--container NAME` | Command-line wrapper over `lib/container.sh`: prints the container name for a database, or `true`/`false` for whether a container is running (fails if it does not exist). Other scripts import the library instead of calling this |
 | `run-database-sql.sh --container NAME [--bare] [--ask recovery]` | Command-line wrapper over `lib/database.sh`: runs the SQL on standard input with psql in that container (`--bare` for scriptable output), or `--ask recovery` prints `t` (standby) or `f` (accepts writes) |
 | `../lib/container.sh`, `../lib/database.sh` (libraries) | **Every docker and database call, reusable from any script.** `container::` has `name_of`, `is_running`, `inspect`, `image`, `network`, `volume`, `setting`, `health`, `start`, `stop`, `wait_healthy`, `compose_up`, `logs`, `rewind` (pg_rewind in a throwaway container) and `mark_standby`. `database::` has `run`, `bare`, `in_recovery`, `is_ready` and `drop_all_sql`. Imported with `source "${SCRIPT_DIR}../lib/NAME.sh"` (plus a `# shellcheck source=` hint); they run in the caller's process, so there is no extra process or run log per call. They assume the importing script has `log` and `die` (from `runtime.sh`) |
+| `../lib/access.sh`, `../lib/fault.sh`, `../lib/toxic.sh` (libraries) | Controlled faults and access: `access::` sets passwords and probes logins; `fault::` crashes, freezes, isolates a node, delays apply and generates WAL; `toxic::` adds network delay, silence or a cut link through Toxiproxy |
+| `../lib/epoch.sh`, `../lib/lease.sh`, `../lib/controller.sh`, `../lib/actor.sh` (libraries) | The failover control plane: `epoch::` the failover number that only goes up; `lease::` the writer's lease and its guard; `controller::` runs the detect-only controller in a container; `actor::` runs controller and actor for a test and times the client's view |
+| `../lib/measure.sh`, `../lib/judge.sh`, `../lib/pytools.sh` (libraries) | `measure::` statistics for trial results; `judge::` PASS/FAIL against targets; `pytools::` the pinned Python checkers |
+| `../services/failover_controller`, `../services/fence_guard` (Python, run in containers) | The detect-only failover controller (also renews the lease) and the guard that stops a writer whose lease has expired; each has its own tests, run by `check-python.sh` |
 | `../lib/story.sh` (a library, sourced not run) | The failover test's story-and-check layer as `story::` functions: `narrate` (ms timestamp, script name, message, also logged), `narrate_stream`, `narrate_query`, `run_logged`, `expect_equal`, and the helpers that combine a database or container call with narration: `run_statement`, `expect_query`, `expect_stopped`, `drop_all_tables`. Declares `# Depends: container database`, so a script importing it imports those two as well |
 | `primary/init-replication.sh`, `standby/entrypoint.sh` | Run inside the Postgres image, not on the host, so they cannot import `runtime.sh`. Each carries its own copy of the standard's functions (the same text, copied from the standard's example). `init-replication.sh` runs once, on an empty data volume (the image's init step); `entrypoint.sh` runs every time the standby container starts |
 | `runtime.sh` (a library, in this folder) | The Bash standard's own functions, copied unchanged from the standard's examples and checked word for word: `log`, `die`, `on_error`, `require_commands`, `require_integer`, `start_run_log`, `cleanup`, plus the run-log state. Every host script imports it with `source "${SCRIPT_DIR}runtime.sh"`, so none carries its own copy. Do not edit it; a change to the standard replaces it |
@@ -137,8 +155,11 @@ The robustness patterns the scripts use (promotion guard, split-brain guard, ver
 
 ## What is proven
 
-See `capability-register.md`: each capability with its evidence, status (automated, manual, partial) and limits, plus
-the gaps (observed RPO and RTO, fencing, crash failures, a true `pg_rewind` divergence, load, network faults).
+See [capability-register.md](capability-register.md): each capability with its evidence, status (automated, manual, partial) and
+limits, plus the gaps still open. In short: replication, failover and fail-back, RPO and RTO, crash and network faults, secret rotation,
+fencing at start time and live (an epoch and a lease with a guard), a failure detector and an acting controller that survives its own
+kill. Open: the epoch check in every write, loss/jitter/bandwidth faults, and the application layer (Phase 2); the client service
+(Phase 3).
 
 ## Design notes
 
@@ -154,9 +175,13 @@ the gaps (observed RPO and RTO, fencing, crash failures, a true `pg_rewind` dive
 
 ## Known limits (deliberate, for later phases)
 
-- Failover is manual. There is no failure detector, fencing token or client rerouting yet, so the
-  "refuse to promote while the primary is up" check in `promote-standby-to-primary.sh` is a guard rail, not real split-brain protection.
-- Rejoining the old primary as a standby is scripted (`promote-primary-to-standby.sh`, `restore-starting-state.sh`) but
-  manual: nothing detects the failure or triggers it. The case where the old primary accepted writes the new one never
-  received (a true divergence for `pg_rewind` to undo) is not exercised yet; the tests only see "no rewind required".
-- Replication here copies state (WAL). The outbox, event stream and idempotent consumers come in later phases.
+- **One controller and one actor**, on one host (a maintenance lock stops two actors there). Replicating them needs a consensus
+  store, which is out of scope. The controller is on the write path through the lease, so an outage longer than the lease time
+  stops the writer (a choice, CTL-01).
+- **The epoch is a file on the host**, and a fenced writer is stopped by a guard that must look in time. A process paused while its
+  lease ran out can write once when it resumes; only an epoch check in every write closes that (GAP-03).
+- **After a failover from synchronous replication the new writer is asynchronous** until sync is switched on again by hand
+  (SYNC-01, GAP-07).
+- **No client service yet.** The tests write through `psql` and `pgbench`; there is no router, no reconnecting client with
+  idempotency keys, and no outbox, event stream or idempotent consumers (GAP-12 in Phase 2; the client service in Phase 3).
+- Packet loss, jitter, bandwidth limits and one-way faults on the replication link are not tested (GAP-11).

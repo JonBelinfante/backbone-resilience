@@ -39,7 +39,7 @@ a hung process that still accepts connections, or a restart that has not finishe
 ## Limits
 
 - **Check, then act, is not atomic.** The primary can come back between the probe and `pg_promote`. Only fencing (a
-  token the old primary must hold to write) closes that gap. This is gap GAP-03, planned for Phase 2.
+  token the old primary must hold to write) closes that gap. The lease, guard and epoch now fence a running old writer (see [lease and guard](lease-and-guard.md)); the part still open is an epoch check in every write (GAP-03).
 - **`--force` and a direct `pg_promote` bypass the check.** The guard is a guard rail for the operator, not a
   lock.
 - **The probe cannot tell a hung primary from a dead one.** Both fail `pg_isready`, or one fails and the other
