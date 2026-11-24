@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # script-kind: executable
-# Purpose: Measure the window after a failover from sync replication when writes have one copy.
+# Purpose: Measure the window after a failover from sync replication, and show the rejoin closes it.
 # Usage: test-sync-after-failover.sh [-h | --help]
 # Requires: cat
 # Exit codes: 0 every step passed, 1 a step failed, 2 usage or configuration error
@@ -23,7 +23,7 @@ readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
 # started by its bare name), so paths to sibling files work however the script is started.
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
-readonly TOTAL_STEPS=4
+readonly TOTAL_STEPS=3
 readonly SQL_NAMES='show synchronous_standby_names'
 readonly SQL_SYNC_STATE="select coalesce(string_agg(sync_state, ','), 'none')
   from pg_stat_replication"
@@ -46,13 +46,13 @@ usage() {
 Usage: test-sync-after-failover.sh [-h | --help]
 
 Run with synchronous replication, crash the writer and promote the standby, then watch the
-window until the old node has rejoined and synchronous replication is switched on again. Steps:
+window until the old node has rejoined and synchronous replication is on again. Steps:
   1. synchronous replication is on and the standby is the synchronous one;
   2. after the failover the new writer is asynchronous and has no standby, yet still
      acknowledges a write: that write exists on one node only;
-  3. the old node rejoins and streams, but as an asynchronous standby: still no zero-loss;
-  4. set-replication-mode.sh --mode sync (run for the new writer) closes the window; its
-     length, from the promotion, is reported.
+  3. the old node rejoins (promote-primary-to-standby.sh): it streams as the synchronous
+     standby, because the rejoin switches the recorded mode on again. The window, from the
+     crash to that point, is reported.
 It stops at the first FAIL, then restores the starting state. Throwaway stack only.
 
 Environment: PRIMARY_CONTAINER, STANDBY_CONTAINER, RUN_LOG_DIR.
@@ -96,34 +96,21 @@ step_after_failover() {
   story::narrate 'PASS: a write was acknowledged while only one copy of it existed'
 }
 
-# Step 3: the old node rejoins as an asynchronous standby.
+# Step 3: the old node rejoins; the rejoin switches synchronous replication on again.
+# Usage: step_rejoined STARTED_MS
 step_rejoined() {
-  begin_step 3 'the old node rejoins and streams, but asynchronously'
+  local started="${1:?start time required}"
+  local now
+
+  begin_step 3 'the old node rejoins and the rejoin switches synchronous replication on'
   story::run_logged bash "${SCRIPT_DIR}promote-primary-to-standby.sh"
   database::wait_for_streaming "${STANDBY_CONTAINER}"
   story::expect_equal 'sync_state of the rejoined node' \
     "$(database::bare "${STANDBY_CONTAINER}" <<< "${SQL_SYNC_STATE}")" \
-    async
+    sync
   story::expect_equal 'synchronous_standby_names on the new writer' \
     "$(database::bare "${STANDBY_CONTAINER}" <<< "${SQL_NAMES}")" \
-    ''
-}
-
-# Step 4: switch synchronous replication on for the new writer; report how long the window was.
-# Usage: step_sync_again STARTED_MS
-step_sync_again() {
-  local started="${1:?start time required}"
-  local now
-
-  begin_step 4 'synchronous replication is switched on again for the new writer'
-  story::run_logged env \
-    "PRIMARY_CONTAINER=${STANDBY_CONTAINER}" \
-    bash \
-    "${SCRIPT_DIR}set-replication-mode.sh" \
-    --mode sync
-  story::expect_equal 'sync_state of the rejoined node' \
-    "$(database::bare "${STANDBY_CONTAINER}" <<< "${SQL_SYNC_STATE}")" \
-    sync
+    'FIRST 1 (standby1)'
   now="$(story::now_milliseconds)"
   story::narrate "the window with no zero-loss guarantee: $(( now - started )) ms from the crash"
 }
@@ -136,8 +123,7 @@ run_experiment() {
   step_sync_on
   started="$(story::now_milliseconds)"
   step_after_failover
-  step_rejoined
-  step_sync_again "${started}"
+  step_rejoined "${started}"
   story::narrate "PASS: all ${TOTAL_STEPS} steps passed"
 }
 

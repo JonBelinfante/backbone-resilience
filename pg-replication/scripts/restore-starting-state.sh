@@ -36,6 +36,8 @@ source "${SCRIPT_DIR}../lib/container.sh"
 source "${SCRIPT_DIR}../lib/database.sh"
 # shellcheck source=../lib/lock.sh
 source "${SCRIPT_DIR}../lib/lock.sh"
+# shellcheck source=../lib/mode.sh
+source "${SCRIPT_DIR}../lib/mode.sh"
 
 # Print how to run this script.
 usage() {
@@ -246,6 +248,7 @@ main() {
   lock::acquire "${REBUILD_MARKER_DIR}" "${SCRIPT_NAME}"
   restore_starting_state
   check_starting_state
+  mode::record "${REBUILD_MARKER_DIR}" async
 }
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR

@@ -40,6 +40,8 @@ source "${SCRIPT_DIR}../lib/container.sh"
 source "${SCRIPT_DIR}../lib/database.sh"
 # shellcheck source=../lib/lock.sh
 source "${SCRIPT_DIR}../lib/lock.sh"
+# shellcheck source=../lib/mode.sh
+source "${SCRIPT_DIR}../lib/mode.sh"
 
 # Print how to run this script.
 usage() {
@@ -260,6 +262,24 @@ prepare_rebuild() {
   checkpoint_writer
 }
 
+# Put the replication mode back to the one asked for before the failover. A promoted standby carries
+# no synchronous setting, so without this a rejoin under "sync" leaves the new writer asynchronous.
+# Only called once the rejoined node streams, because sync with no standby would block every write.
+restore_wanted_mode() {
+  log INFO 'checking the replication mode that was wanted before the failover'
+  local wanted
+  local -a command=(env "PRIMARY_CONTAINER=${STANDBY_CONTAINER}")
+
+  wanted="$(mode::wanted "${REBUILD_MARKER_DIR}")"
+  if [[ "${wanted}" != 'sync' ]]; then
+    log INFO "the wanted replication mode is ${wanted}: nothing to switch on"
+    return 0
+  fi
+  log INFO "DECISION: ${STANDBY_CONTAINER} goes back to synchronous replication"
+  command+=(bash "${SCRIPT_DIR}set-replication-mode.sh" --mode sync)
+  "${command[@]}" > /dev/null
+}
+
 # Script entry point.
 main() {
   local requested='auto'
@@ -298,6 +318,7 @@ main() {
   start_old_primary
   reclone_unless_streaming
   clear_rebuild_marker
+  restore_wanted_mode
   report_result
 }
 

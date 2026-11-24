@@ -214,3 +214,13 @@ Hand-over (`test-lease-handover.sh`, same day): one run, passed at once. The ear
 
 Sync window (`test-sync-after-failover.sh`, 2026-11-23): one run, passed at once; the stack ended with both nodes asynchronous and the standby in recovery, the starting state.
 
+## Evidence log, 2026-11-24 (GAP-07: sync switched on again by the rejoin)
+
+| Run | Result |
+|---|---|
+| `test-sync-after-failover.sh` (3 steps now) | 1 run, passed at once: after the rejoin, with no manual step, the node was `sync` and the setting `FIRST 1 (standby1)`; window **8.0 s** from the crash |
+| `run-all-checks.sh` | lint, docs, Python and the round trip all passed |
+| `test-hard-kill.sh --target restore` | 8 cases (kills at 1 to 7 s, and two that finished), all recovered |
+
+Change: `lib/mode.sh` records the wanted mode (`set-replication-mode.sh` writes it, `restore-starting-state.sh` sets async); `promote-primary-to-standby.sh` reads it after the node streams and, for sync, runs `set-replication-mode.sh --mode sync` for the new writer.
+

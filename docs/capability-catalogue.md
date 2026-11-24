@@ -170,10 +170,11 @@ Each test restores the starting state afterwards, so you can run them in any ord
 - **Register:** CTL-01.
 
 ### 4.5 The window after failing over from synchronous replication
-- **Problem:** after a failover the new writer has no standby, so it runs asynchronously until sync is switched on again.
+- **Problem:** after a failover the new writer has no standby, so it runs asynchronously until sync is on again.
 - **Test:** `test-sync-after-failover.sh`.
-- **Result:** the new writer acknowledged a write with one copy; sync was back after **6.8 s** (a floor: scripted, no human delay).
-- **Limit:** nothing switches sync on again automatically after a rejoin (open).
+- **Mechanism:** the wanted mode is recorded when it is set; once the old node has rejoined and streams, the rejoin switches sync on for the new writer.
+- **Result:** the new writer acknowledged a write with one copy; the rejoin closed the window with no manual step after **8.0 s** from the crash.
+- **Limit:** the window is as long as the rejoin takes (a crashed node is re-cloned). The actor cannot switch sync on itself, because sync with no standby blocks every write.
 - **Register:** SYNC-01.
 
 ---
@@ -271,7 +272,7 @@ Run `measure-recovery.sh` (about 13 minutes); it writes [recovery-report.md](../
 Open and deliberately out of scope for now (details in the register, section 4):
 
 - **An epoch check in every write**, which closes the paused-process case (GAP-03).
-- **Switching sync on again automatically** after a rejoin, and a **replicated controller** (needs a consensus store) (GAP-07).
+- **A replicated controller** (needs a consensus store) (GAP-07).
 - **Packet loss, jitter, bandwidth and one-way faults** on the replication link (GAP-11).
 - **The application layer** (Phase 2): outbox, idempotent consumers, per-aggregate sequences, an independent invariant checker (GAP-12).
 - **The service layer** (Phase 3): a client with idempotency keys that reconnects through a failover, RTO under realistic load, rotation

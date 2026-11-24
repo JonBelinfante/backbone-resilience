@@ -17,6 +17,7 @@ shopt -s inherit_errexit
 # application_name the standby connects with (set in standby/entrypoint.sh).
 readonly PRIMARY_CONTAINER="${PRIMARY_CONTAINER:-pg-primary}"
 readonly STANDBY_NAME="${STANDBY_NAME:-standby1}"
+readonly REBUILD_MARKER_DIR="${REBUILD_MARKER_DIR:-${TMPDIR:-/tmp}}"
 
 readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
@@ -27,6 +28,8 @@ readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 source "${SCRIPT_DIR}runtime.sh"
 # shellcheck source=../lib/database.sh
 source "${SCRIPT_DIR}../lib/database.sh"
+# shellcheck source=../lib/mode.sh
+source "${SCRIPT_DIR}../lib/mode.sh"
 
 # Print how to run this script.
 usage() {
@@ -34,7 +37,7 @@ usage() {
 Usage: set-replication-mode.sh [-h | --help] [--mode async|sync|status]
 
 Switch the primary between asynchronous and synchronous replication. No restart
-is needed. Whatever the mode, finish by printing the current setting and the
+is needed. The mode is recorded, so a rejoin can switch sync on again after a failover. Whatever the mode, finish by printing the current setting and the
 standby's sync_state.
 
 Modes:
@@ -65,6 +68,7 @@ enable_sync() {
   log INFO "CHANGE: enabling synchronous replication (standby=${STANDBY_NAME})"
   psql_primary -c "alter system set synchronous_standby_names = 'FIRST 1 (${STANDBY_NAME})'"
   psql_primary -c 'select pg_reload_conf()' > /dev/null
+  mode::record "${REBUILD_MARKER_DIR}" sync
   printf 'Synchronous replication ON. Writes will block if the standby is unavailable.\n'
 }
 
@@ -73,6 +77,7 @@ enable_async() {
   log INFO 'CHANGE: switching to asynchronous replication'
   psql_primary -c 'alter system reset synchronous_standby_names'
   psql_primary -c 'select pg_reload_conf()' > /dev/null
+  mode::record "${REBUILD_MARKER_DIR}" async
   printf 'Asynchronous replication ON.\n'
 }
 

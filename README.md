@@ -54,7 +54,7 @@ All on one laptop (Docker Compose, PostgreSQL 16, two nodes). They show behaviou
 | Downtime with an automatic detector | 2.8 s (crash) to 8.3 s (hung writer) | ACT-01 |
 | Time to notice a silent network link | 60 s by default, 4 s with tuned timeouts | NET-03 |
 | Two writers with a partitioned, unkillable old writer | 14 to 16 s without the lease guard; **none** with it | LEASE-02 |
-| Window of reduced safety after failing over from sync | 6.8 s (scripted floor) | SYNC-01 |
+| Window of reduced safety after failing over from sync (closed by the rejoin) | 8.0 s | SYNC-01 |
 | Failed writes while rotating database passwords | 0 | SEC-R3 |
 | Acknowledged writes lost across crash, mid-transaction kill and checkpoint kill | 0 | CRS-01 |
 
