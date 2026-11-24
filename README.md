@@ -84,6 +84,7 @@ The credentials are throwaway and the ports are bound to loopback: do not expose
 
 ```
 README.md                  this file
+LICENSE                    MIT licence
 docs/                      capability catalogue, the Python standard, proposals to the Bash standard
 pg-replication/            the Postgres pair: compose file, scripts, libraries, tests, register, patterns
 services/                  Python services: failover_controller (detector), fence_guard (lease guard)
@@ -101,6 +102,11 @@ CLAUDE.md                  working notes for the AI coding assistant used on thi
 | 4 | Hot-hot with partitioned ownership | Not started |
 | 5 | Multi-writer for commutative ledger entries, showing where it breaks | Not started |
 | 6 | Chaos experiment catalogue mapped to a risk register, with SLI and error-budget reporting | Not started |
+
+## Licence
+
+MIT: see [LICENSE](LICENSE). The code and documents are free to use, copy, modify and share. The database credentials in the
+compose file are throwaway values for local experiments only.
 
 ## Honest limits
 
