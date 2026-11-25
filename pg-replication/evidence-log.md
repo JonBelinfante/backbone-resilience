@@ -22,6 +22,7 @@ The log uses these terms. The write-ahead log (WAL) is the stream of changes tha
 | 2026-11-24 | [Synchronous replication switched on again by the rejoin](#2026-11-24-synchronous-replication-switched-on-again-by-the-rejoin) |
 | 2026-11-25 | [The write check, the fail-back and link faults](#2026-11-25-the-write-check-the-fail-back-and-link-faults) |
 | 2026-11-25 | [The Phase 1 remainder](#2026-11-25-the-phase-1-remainder) |
+| 2026-11-25 | [The restore left the writer synchronous](#2026-11-25-the-restore-left-the-writer-synchronous) |
 
 ## 2026-11-14: observations behind the manual rows
 
@@ -270,3 +271,18 @@ Three defects were found and fixed.
 An interrupted rejoin also left the rebuild marker of `pg-primary`. The cleanup failed to restore, and a second run then found the standby not streaming. That work belongs to the rejoin tests, and the restore now also rebuilds a stopped standby that does not stream.
 
 **What the new tests do not show.** The replication modes test uses one standby only. The rejoin failure test uses one kill point, while the rebuild marker exists. The point-in-time recovery test covers one timeline, with no failover between the backup and the recovery. Its archive is on the primary only, its target is an LSN, and it has no off-site copy. The split-brain guard acts only when the start-time fence has been lifted, because the fence is the first line (FOV-10).
+
+## 2026-11-25: the restore left the writer synchronous
+
+While the sample transcripts were recorded, `test-replication-modes.sh` passed and `test-divergence-rewind.sh` then hung at its first write. The writer showed `synchronous_standby_names` as `FIRST 1 (standby1)`, and the blocked insert waited on `SyncRep` because the test had detached the standby.
+
+The cause was in `restore-starting-state.sh`. It recorded the wanted mode as asynchronous in the mode file, but it never reset the setting on the writer. A test that ended in synchronous mode therefore left the stack synchronous, although the restore claims to return the starting state.
+
+| Check | Result |
+|---|---|
+| The restore after the change, started from a synchronous writer. | `synchronous_standby_names` was empty afterwards, and the temporary folder was empty. |
+| `test-replication-modes.sh`, with the new assertion after its cleanup. | It passed, and the assertion read an empty setting. |
+| `test-divergence-rewind.sh`, which had hung. | It passed with 16 checks. |
+
+The fix calls `set-replication-mode.sh --mode async` at the end of the restore. The earlier hung run is the control, because it shows what the old restore left behind.
+

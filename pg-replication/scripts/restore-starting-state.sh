@@ -38,8 +38,6 @@ source "${SCRIPT_DIR}../lib/container.sh"
 source "${SCRIPT_DIR}../lib/database.sh"
 # shellcheck source=../lib/lock.sh
 source "${SCRIPT_DIR}../lib/lock.sh"
-# shellcheck source=../lib/mode.sh
-source "${SCRIPT_DIR}../lib/mode.sh"
 # shellcheck source=../lib/fence.sh
 source "${SCRIPT_DIR}../lib/fence.sh"
 
@@ -300,6 +298,13 @@ check_starting_state() {
     "${STANDBY_CONTAINER}"
 }
 
+# Switch the writer to asynchronous replication, which is the starting state. A test that ended in
+# synchronous mode would otherwise leave every commit waiting for a standby that may be detached.
+set_asynchronous() {
+  log INFO 'DECISION: the starting state is asynchronous: resetting the writer to async'
+  bash "${SCRIPT_DIR}set-replication-mode.sh" --mode async
+}
+
 # Script entry point.
 main() {
   start_run_log "$@"
@@ -328,7 +333,7 @@ main() {
   lock::acquire "${REBUILD_MARKER_DIR}" "${SCRIPT_NAME}"
   restore_starting_state
   check_starting_state
-  mode::record "${REBUILD_MARKER_DIR}" async
+  set_asynchronous
 }
 
 trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR

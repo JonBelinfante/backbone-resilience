@@ -218,6 +218,7 @@ run_and_restore() {
   wait "${pid}" || outcome='failed'
   story::narrate '== Cleanup: restore the starting state (asynchronous) =='
   story::run_logged bash "${SCRIPT_DIR}restore-starting-state.sh"
+  story::expect_query "${PRIMARY_CONTAINER}" 'show synchronous_standby_names' ''
   story::run_statement "${PRIMARY_CONTAINER}" "${SQL_DROP}"
   [[ "${outcome}" == 'passed' ]] || die 1 'the experiment failed (the state was restored)'
 }
