@@ -114,9 +114,9 @@ Phase 1 is complete. Every Phase 1 capability has an automated test, and each te
 - **Problem:** A failover script may die half way. The platform must then recover by itself.
 - **Mechanism:** `restore-starting-state.sh` reads the current roles and repairs them. A rebuild-pending marker makes a half-rewound node be cloned again and never trusted.
 - **Test:** `test-hard-kill.sh` sends SIGKILL to the round trip, the restore and the rotation at set delays.
-- **Result:** All 16 kills of the round trip and all kills of the restore were recovered. The test found four real faults. They were a stuck split-brain guard, `pg_rewind` on a half-rewound directory, status queries during shutdown, and a wedged standby that was reported as a success. All four are fixed.
+- **Result:** All 16 kills of the round trip and all kills of the restore were recovered. The test found four real faults. They were a stuck split-brain guard, `pg_rewind` on a half-rewound directory, status queries during shutdown, and a wedged standby that was reported as a success. All four are fixed. Two later defects, found by the fail-back test, are also fixed. The restore now rebuilds a stopped standby that does not stream. It also waits until the standby has replayed the writer's position before it reports success.
 - **Pattern:** [kill-test harness](../pg-replication/docs/patterns/kill-test-harness.md).
-- **Register:** FOV-07, FOV-08 and OPS-01.
+- **Register:** FOV-07, FOV-08, OPS-01, OPS-02 and OPS-05.
 
 ### 2.5 A second failure during a rejoin
 
@@ -327,6 +327,7 @@ Replication copies a mistake as faithfully as it copies data. Only a backup with
 - **House standards, checked by tools.** Shell scripts follow a deterministic Bash standard that `lint-scripts.sh` checks. Python follows its own standard, with ruff, mypy in strict mode and pytest in a pinned container, and no waivers. `run-all-checks.sh` runs lint, documents, Python, hygiene, timeline and the round trip.
 - **An audit trail.** Every script writes a run log with millisecond timestamps in Coordinated Universal Time (UTC). `run-with-log-folder.sh --merge` merges a whole run into one timeline.
 - **Hygiene and timeline checks.** `check-hygiene.sh` checks three rules. Host scripts make no direct `docker`, `psql` or `pgbench` calls. Every published port is on loopback. No tracked file holds a private key or an access token. `check-run-timeline.sh` checks that a merged timeline is ordered and well formed. Both checks run in `run-all-checks.sh`, and both were shown to fail on a bad copy.
+- **Observability and engineering rows.** The register records the run logs, the merged timeline, the Bash standard and the document check as OBS-01 to OBS-03 and ENG-01 to ENG-04.
 - **One place for each kind of call.** Database calls live in `lib/database.sh`, and most `docker` calls live in `lib/container.sh`. The libraries that serve one job run `docker` themselves. Those libraries are `fence.sh`, `lease.sh`, `backup.sh` and `access.sh`.
 
 ---
