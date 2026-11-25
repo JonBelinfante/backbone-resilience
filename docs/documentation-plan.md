@@ -48,7 +48,7 @@ Sizes are small (S, under an hour), medium (M, one to three hours) and large (L,
 | ID | Work package | Deliverable | Depends on | Size | Status |
 |---|---|---|---|---|---|
 | WP0 | Decisions | Four answers, listed below. | None. | S | Done on 2026-11-25. |
-| WP1 | Fix the claims | Reworded openings in `README.md` and `CLAUDE.md`. The Target Operating Model sentence says what exists. The headline says when data is and is not lost. | None. | S | Open. |
+| WP1 | Fix the claims | Reworded openings in `README.md` and `CLAUDE.md`. The Target Operating Model sentence says what exists. The headline says when data is and is not lost. | None. | S | Done on 2026-11-25. |
 | WP13 | Remove hard-coded counts | The README no longer states the number of capabilities or tests. | None. | S | Open. |
 | WP3 | Evidence strength | New columns in the register for the number of runs and the date of the last run. The values come from the evidence log. | None. | M | Open. |
 | WP4 | Glossary | `docs/glossary.md` defines each term once: writer, replica, actor, controller, guard, lease, epoch, fence, witness, slot, timeline and the rest. | None. | M | Open. |

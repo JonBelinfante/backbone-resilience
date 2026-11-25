@@ -1,6 +1,6 @@
 # Resilience: evidence for how a database platform survives failure
 
-This repository is a hands-on library. It shows, with repeatable tests and measured numbers, how a pair of PostgreSQL databases stays available. It also shows how the pair avoids losing acknowledged data when nodes, networks and the failover machinery itself fail.
+This repository is a hands-on library. It shows, with repeatable tests and measured numbers, how a pair of PostgreSQL databases stays available. It also measures when acknowledged data is lost and when it is not, as nodes, networks and the failover machinery itself fail.
 
 It is **not an application**. It is a working laboratory. Each mechanism that a resilient database platform needs is built, broken on purpose and measured. Those mechanisms are replication, failover, fencing, failure detection, lease-based write protection, crash recovery, backup and secret rotation. Each one comes with a test that you can run, a control that proves the test can see the fault, and a plain statement of its limits.
 
@@ -13,7 +13,7 @@ Most material on high availability describes designs. This repository shows the 
 - **Where the dangerous gaps are.** A failed-over node that is restarted by hand becomes a second writer. An idle writer can fool a failure detector. A controller that renews a lease turns its own outage into a writer outage. Each gap is reproduced, and then it is closed or stated as a trade-off.
 - **A way of proving things.** The tests use negative controls and kill tests at many points. Every result is recorded in a register.
 
-The repository is also practical material for a Target Operating Model for a payments-style platform. That model covers consistency tiers, failure modes, a risk register and chaos-test evidence.
+The repository also supplies evidence that a Target Operating Model for a payments-style platform can use. It holds measured failure behaviour and chaos-test results for the database layer. The risk register and the consistency tiers are not written yet. The [documentation plan](docs/documentation-plan.md) starts them with a failure-mode index.
 
 ## Who it is for
 
