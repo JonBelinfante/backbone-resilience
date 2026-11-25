@@ -24,9 +24,9 @@ The library is for platform engineers, database engineers, site reliability engi
 | You get | Where |
 |---|---|
 | A **capability catalogue**: each resilience problem, its mechanism, its test, the measured result and the limit. | [docs/capability-catalogue.md](docs/capability-catalogue.md) |
-| A **capability register**: 61 capabilities, each with a status, a result and a limit, plus the open gaps. | [pg-replication/capability-register.md](pg-replication/capability-register.md) |
+| A **capability register**: every capability, each with a status, a result and a limit, plus the open gaps. | [pg-replication/capability-register.md](pg-replication/capability-register.md) |
 | An **evidence log**: the commands, numbers and defects found in each run of experiments. | [pg-replication/evidence-log.md](pg-replication/evidence-log.md) |
-| **Runnable tests and experiments**: 27 test scripts and a measurement runner, each restoring the starting state. | [pg-replication/](pg-replication/README.md) |
+| **Runnable tests and experiments**: the test scripts and a measurement runner, each restoring the starting state. | [pg-replication/](pg-replication/README.md) |
 | **Recovery point and recovery time measurements**, with a report. | [pg-replication/docs/recovery-report.md](pg-replication/docs/recovery-report.md) |
 | **Robustness patterns** and diagrams. | [pg-replication/docs/patterns/](pg-replication/docs/patterns/README.md) |
 | A **secret rotation guide** with no failed writes. | [pg-replication/docs/secrets-rotation.md](pg-replication/docs/secrets-rotation.md) |
