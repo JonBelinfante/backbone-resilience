@@ -1,71 +1,65 @@
 # Resilience: evidence for how a database platform survives failure
 
-A hands-on library that shows, with repeatable tests and measured numbers, how a pair of PostgreSQL databases stays
-available and loses no acknowledged data when nodes, networks and the failover machinery itself fail.
+This repository is a hands-on library. It shows, with repeatable tests and measured numbers, how a pair of PostgreSQL databases stays available. It also shows how the pair avoids losing acknowledged data when nodes, networks and the failover machinery itself fail.
 
-It is **not an application**. It is a working laboratory: every mechanism a resilient database platform needs (replication,
-failover, fencing, failure detection, lease-based write protection, crash recovery, secret rotation) is built, broken on
-purpose, and measured. Each one comes with a test you can run, a control that proves the test can see the fault, and an honest note of its limits.
+It is **not an application**. It is a working laboratory. Each mechanism that a resilient database platform needs is built, broken on purpose and measured. Those mechanisms are replication, failover, fencing, failure detection, lease-based write protection, crash recovery, backup and secret rotation. Each one comes with a test that you can run, a control that proves the test can see the fault, and a plain statement of its limits.
 
 ## Why it is useful
 
-Most material on high availability describes designs. This repository shows the **cost and the evidence**:
+Most material on high availability describes designs. This repository shows the **cost and the evidence**.
 
-- **What each guarantee costs.** Synchronous replication loses nothing but blocks writes while the standby is unreachable and
-  halves throughput in our load test; asynchronous loses about six writes for every second of lag.
-- **Where detection time goes.** A promotion takes under a second; noticing the failure takes 2 to 60 seconds, and that, not the
-  promotion, sets the real downtime.
-- **Where the dangerous gaps are.** A failed-over node restarted by hand becomes a second writer; an idle writer fools a failure
-  detector; a controller that renews a lease turns its own outage into a writer outage. Each is reproduced, then closed or stated as a trade-off.
-- **A way of proving things.** Tests with negative controls, kill tests at many points, and every result recorded in a register.
+- **What each guarantee costs.** Synchronous replication loses nothing, but it blocks writes while the standby is unreachable. It also halved throughput in our load test. Asynchronous replication loses about six writes for every second of lag.
+- **Where detection time goes.** A promotion takes under a second. Noticing the failure takes between 2 and 60 seconds. That delay, not the promotion, sets the real downtime.
+- **Where the dangerous gaps are.** A failed-over node that is restarted by hand becomes a second writer. An idle writer can fool a failure detector. A controller that renews a lease turns its own outage into a writer outage. Each gap is reproduced, and then it is closed or stated as a trade-off.
+- **A way of proving things.** The tests use negative controls and kill tests at many points. Every result is recorded in a register.
 
-It also works as practical material for a **Target Operating Model** for a payments-style platform: consistency tiers, failure
-modes, a risk register, and chaos-test evidence.
+The repository is also practical material for a Target Operating Model for a payments-style platform. That model covers consistency tiers, failure modes, a risk register and chaos-test evidence.
 
 ## Who it is for
 
-Platform and database engineers, SREs, and architects who need to design, review or teach resilient database platforms, and
-anyone who wants a worked example of turning an availability claim into a test.
+The library is for platform engineers, database engineers, site reliability engineers and architects. They need to design, review or teach resilient database platforms. It also suits anyone who wants a worked example of turning an availability claim into a test.
 
 ## What you get
 
 | You get | Where |
 |---|---|
-| A **capability catalogue**: each resilience problem, its mechanism, the test, the measured result and the limit | [docs/capability-catalogue.md](docs/capability-catalogue.md) |
-| A **capability register**: 61 capabilities, each with status, evidence and limits, plus the open gaps | [pg-replication/capability-register.md](pg-replication/capability-register.md) |
-| An **evidence log**: the commands, numbers and defects found in each run of experiments | [pg-replication/evidence-log.md](pg-replication/evidence-log.md) |
-| **Runnable tests and experiments** (27 test scripts and a measurement runner), each restoring the starting state | [pg-replication/](pg-replication/README.md) |
-| **RPO and RTO measurements** with a report | [pg-replication/docs/recovery-report.md](pg-replication/docs/recovery-report.md) |
-| **Robustness patterns** (guards, verify-after-act, decisions read the writer) and diagrams | [pg-replication/docs/patterns/](pg-replication/docs/patterns/README.md) |
-| A **secret rotation guide** with no failed writes | [pg-replication/docs/secrets-rotation.md](pg-replication/docs/secrets-rotation.md) |
-| Two small **Python services**: a failover controller and a lease guard | [services/](services/) |
-| Two **house standards** the code is checked against (Bash and Python) | [docs/python-standard.md](docs/python-standard.md), `pg-replication/scripts/lint-scripts.sh` |
+| A **capability catalogue**: each resilience problem, its mechanism, its test, the measured result and the limit. | [docs/capability-catalogue.md](docs/capability-catalogue.md) |
+| A **capability register**: 61 capabilities, each with a status, a result and a limit, plus the open gaps. | [pg-replication/capability-register.md](pg-replication/capability-register.md) |
+| An **evidence log**: the commands, numbers and defects found in each run of experiments. | [pg-replication/evidence-log.md](pg-replication/evidence-log.md) |
+| **Runnable tests and experiments**: 27 test scripts and a measurement runner, each restoring the starting state. | [pg-replication/](pg-replication/README.md) |
+| **Recovery point and recovery time measurements**, with a report. | [pg-replication/docs/recovery-report.md](pg-replication/docs/recovery-report.md) |
+| **Robustness patterns** and diagrams. | [pg-replication/docs/patterns/](pg-replication/docs/patterns/README.md) |
+| A **secret rotation guide** with no failed writes. | [pg-replication/docs/secrets-rotation.md](pg-replication/docs/secrets-rotation.md) |
+| Two small **Python services**: a failover controller and a lease guard. | [services/](services/) |
+| Two **house standards** that the code is checked against: one for Bash and one for Python. | [docs/python-standard.md](docs/python-standard.md) and `pg-replication/scripts/lint-scripts.sh` |
 
 ## What was measured
 
-All on one laptop (Docker Compose, PostgreSQL 16, two nodes). They show behaviour and relative cost, not production figures.
+All measurements come from one laptop running Docker Compose, PostgreSQL 16 and two nodes. They show behaviour and relative cost. They are not production figures.
+
+Two terms recur below. The recovery point objective (RPO) is the amount of acknowledged data that may be lost. The recovery time objective (RTO) is the time that clients may be unable to write. The evidence column gives identifiers, such as RPO-01, that appear in the capability register.
 
 | Question | Answer | Evidence |
 |---|---|---|
-| Data lost on a writer crash, asynchronous | About 6 writes per second of replication lag | RPO-01 |
-| Data lost on a writer crash, synchronous | **0**, and a control showed the test can see loss | RPO-02 |
-| Price of zero loss | Writes block while the standby is cut off; about half the throughput under 16 clients | RPO-02, LOAD-01 |
-| Downtime of a scripted promotion | 0.3 to 0.7 s | RTO-01 |
-| Downtime with an automatic detector | 2.8 s (crash) to 8.3 s (hung writer) | ACT-01 |
-| Time to notice a silent network link | 60 s by default, 4 s with tuned timeouts | NET-03 |
-| Two writers with a partitioned, unkillable old writer | 14 to 16 s without the lease guard; **none** with it | LEASE-02 |
-| Window of reduced safety after failing over from sync (closed by the rejoin) | 8.0 s | SYNC-01 |
-| A paused writer resuming after its lease ran out | accepted a write 3.1 s late without a write check; refused with it | LEASE-04 |
-| Synchronous commit time under jitter (100 ms plus or minus 100) | median 80 ms rises to about 370 ms, with a wide spread | NET-04 |
-| A link that drops every connection after 256 KB | replication stalls completely: each reconnect restarts at the segment start | NET-07 |
-| Failed writes while rotating database passwords | 0 | SEC-R3 |
-| Acknowledged writes lost across crash, mid-transaction kill and checkpoint kill | 0 | CRS-01 |
-| Rows recovered after a mistaken delete that replicated (restore to the position before it) | 150 of 150, same checksum; 0 when restoring to the end of the archive | BAK-01 |
-| Acknowledged rows on both nodes after the new writer dies during a rejoin | 8 of 8, identical | FOV-11 |
+| How much data is lost when the writer crashes under asynchronous replication? | About 6 writes for each second of replication lag. | RPO-01 |
+| How much is lost under synchronous replication? | None. A control showed that the test can see a loss. | RPO-02 |
+| What does zero loss cost? | Writes block while the standby is cut off. Throughput halves under 16 clients. | RPO-02, LOAD-01 |
+| How long does a scripted promotion take? | Between 0.3 and 0.7 seconds. | RTO-01 |
+| How long does an automatic detector add? | The downtime is 2.8 seconds for a crash and 8.3 seconds for a hung writer. | ACT-01 |
+| How long does a silent network link go unnoticed? | 60 seconds by default, or 4 seconds with tuned timeouts. | NET-03 |
+| How long are there two writers when the old writer is partitioned and cannot be killed? | 14 to 16 seconds without the lease guard, and none with it. | LEASE-02 |
+| How long is safety reduced after a failover from synchronous replication? | 8.0 seconds. The rejoin of the old node closes the window. | SYNC-01 |
+| What happens when a paused writer resumes after its lease has run out? | Without a write check it accepted a write 3.1 seconds late. With the check it refused the write. | LEASE-04 |
+| What does jitter do to a synchronous commit? | The median rises from about 80 to about 370 milliseconds, with a wide spread. | NET-04 |
+| What happens when a link drops every connection after 256 KB? | Replication stalls completely, because each reconnect restarts at the segment start. | NET-07 |
+| How many writes fail while the database passwords are rotated? | None. | SEC-R3 |
+| How many acknowledged writes are lost to a crash, a mid-transaction kill or a checkpoint kill? | None. | CRS-01 |
+| How much data returns after a mistaken delete that replicated? | All 150 rows, with the same checksum, when the restore stops before the delete. None when it runs to the end of the archive. | BAK-01 |
+| How many acknowledged rows survive when the new writer dies during a rejoin? | All 8, identical on both nodes. | FOV-11 |
 
 ## Run it
 
-You need Docker with Compose and **Bash 5.0 or later** (macOS ships 3.2; `brew install bash`).
+You need Docker with Compose and **Bash 5.0 or later**. macOS ships version 3.2, so run `brew install bash` first.
 
 ```bash
 cd pg-replication
@@ -75,15 +69,16 @@ bash scripts/run-all-checks.sh             # lint, documents, Python checks, the
 bash scripts/test-auto-failover.sh         # a controller detects, fences and promotes; the client's downtime is timed
 ```
 
-The linter needs `BASHCHECK_WRAPPER` set; see [pg-replication/README.md](pg-replication/README.md). Every script takes `--help`.
-The credentials are throwaway and the ports are bound to loopback: do not expose them, and never put real secrets here.
+The linter needs `BASHCHECK_WRAPPER` to be set. See [pg-replication/README.md](pg-replication/README.md) for the value. Every script accepts `--help`, except two log scripts that need `RUN_LOG_DIR` to be set. That README explains the limit.
+
+The credentials are throwaway values and the ports are bound to loopback. Do not expose them, and never put real secrets in this repository.
 
 ## How to read it
 
-1. [Capability catalogue](docs/capability-catalogue.md): the map, grouped by problem.
-2. Run the test named in an entry, and read its narrated output.
-3. [Capability register](pg-replication/capability-register.md): the full evidence, limits and open gaps.
-4. [Patterns](pg-replication/docs/patterns/README.md) and [diagrams](pg-replication/docs/diagrams/failover-sequence.md): why the scripts are shaped as they are.
+1. Start with the [capability catalogue](docs/capability-catalogue.md). It is the map, grouped by problem.
+2. Run the test that an entry names, and read its narrated output.
+3. Read the [capability register](pg-replication/capability-register.md) for the status, result and limit of every capability, and for the open gaps.
+4. Read the [patterns](pg-replication/docs/patterns/README.md) and the [diagrams](pg-replication/docs/diagrams/failover-sequence.md) to see why the scripts are shaped as they are.
 
 ## Repository map
 
@@ -91,36 +86,34 @@ The credentials are throwaway and the ports are bound to loopback: do not expose
 README.md                  this file
 LICENSE                    MIT licence
 docs/                      capability catalogue, the Python standard, proposals to the Bash standard
-pg-replication/            the Postgres pair: compose file, scripts, libraries, tests, register, patterns
+pg-replication/            the PostgreSQL pair: compose file, scripts, libraries, tests, register, patterns
 services/                  Python services: failover_controller (detector), fence_guard (lease guard)
 python-standard/           pinned tools image and test fixtures for the Python checks
-CLAUDE.md                  working notes for the AI coding assistant used on this project
+CLAUDE.md                  working notes for the coding assistant used on this project
 ```
 
 ## Roadmap and status
 
 | Phase | Scope | State |
 |---|---|---|
-| 1 | The Postgres pair: replication, failover and fail-back, RPO/RTO, crash and network faults, secret rotation, guards, a second failure during a rejoin, backup and point-in-time recovery | Complete: every item automated |
-| 2 | Failover safety (detector, fencing epoch, actor, leases) and the application layer (outbox, idempotent consumers, invariant checker) | Failover safety built, proven and documented as patterns (11 pages); application layer not started |
-| 3 | Service layer: a load generator and clients that retry through a failover; RTO under load; rotation for application clients | Not started |
-| 4 | Hot-hot with partitioned ownership | Not started |
-| 5 | Multi-writer for commutative ledger entries, showing where it breaks | Not started |
-| 6 | Chaos experiment catalogue mapped to a risk register, with SLI and error-budget reporting | Not started |
+| 1 | The PostgreSQL pair: replication, failover and fail-back, recovery measurements, crash and network faults, secret rotation, guards, a second failure during a rejoin, and backup with point-in-time recovery. | Complete. Every item is automated. |
+| 2 | Failover safety (detector, fencing epoch, actor and leases) and the application layer (outbox, idempotent consumers and an invariant checker). | Failover safety is built, proven and documented as patterns. The application layer is not started. |
+| 3 | The service layer: a load generator, clients that retry through a failover, recovery time under load, and rotation for application clients. | Not started. |
+| 4 | Hot-hot operation with partitioned ownership. | Not started. |
+| 5 | Multi-writer operation for commutative ledger entries, showing where it breaks. | Not started. |
+| 6 | A chaos experiment catalogue mapped to a risk register, with service level indicator and error-budget reporting. | Not started. |
 
 ## Licence
 
-MIT: see [LICENSE](LICENSE). The code and documents are free to use, copy, modify and share. The database credentials in the
-compose file are throwaway values for local experiments only.
+The licence is MIT. See [LICENSE](LICENSE). You may use, copy, modify and share the code and the documents. The database credentials in the compose file are throwaway values for local experiments only.
 
 ## Honest limits
 
-- A single machine and a single Docker host: no real network, no second site, no power-loss tests.
-- Point-in-time recovery covers one timeline, with the archive on the primary and no off-site copy; it is by position, not time.
-- Every synchronous result is for one standby; quorum is not tested.
-- One controller and one actor, with a host-local lock. Replicating them needs a consensus store.
-- The tests write through `psql` and `pgbench`. There is no payments service yet, so end-to-end consistency (no lost or duplicated
-  payment) is **not** shown; that is Phase 2 and 3.
-- Numbers are from a few trials each. They show how a mechanism behaves, not statistical confidence.
+- The work runs on a single machine and a single Docker host. There is no real network, no second site and no power-loss test.
+- Point-in-time recovery covers one timeline. The archive sits on the primary with no off-site copy. Recovery is by position, not by time.
+- Every synchronous result is for one standby. A quorum of several standbys is not tested.
+- There is one controller and one actor, with a lock that works on one host only. Replicating them needs a consensus store.
+- The tests write through `psql` and `pgbench`. There is no payments service yet. End-to-end consistency, meaning no lost or duplicated payment, is therefore **not** shown. That belongs to Phases 2 and 3.
+- Each number comes from a few trials. The numbers show how a mechanism behaves. They do not give statistical confidence.
 
-The open gaps are listed in section 4 of the register.
+Section 4 of the register lists the open gaps.

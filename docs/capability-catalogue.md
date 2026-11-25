@@ -1,16 +1,30 @@
 # Capability catalogue: how to build a resilient database platform
 
-This is the learning guide to the repository. Each entry names a **problem** a database platform meets when something
-fails, the **mechanism** that answers it, the **test** you can run to see it work, the **result** we measured, and the
-**limit** of the evidence. Every claim here is backed by a row in the
-[capability register](../pg-replication/capability-register.md), which holds the status and limits; the commands and numbers of each run are in the [evidence log](../pg-replication/evidence-log.md).
+This is the learning guide to the repository. Each entry names a **problem** that a database platform meets when something fails. It then gives the **mechanism** that answers the problem, the **test** that shows the mechanism working, the **result** that we measured, and the **limit** of the evidence.
 
-All measurements come from one laptop (Docker Compose, PostgreSQL 16, two nodes on one host). They show how each
-mechanism behaves and what it costs. They are not production figures: a real network, disk and fleet will differ.
-Where the test includes a **control** (a variant that must fail, to prove the test can see the problem), it says so.
+Every claim is backed by a row in the [capability register](../pg-replication/capability-register.md), which holds the status and the limit. The commands and numbers of each run are in the [evidence log](../pg-replication/evidence-log.md).
 
-Every test runs from the `pg-replication/scripts/` folder as `bash scripts/NAME.sh` (see the [README](../README.md#run-it)).
-Each test restores the starting state afterwards, so you can run them in any order.
+All measurements come from one laptop running Docker Compose, PostgreSQL 16 and two nodes on one host. They show how each mechanism behaves and what it costs. They are not production figures, because a real network, disk and fleet will differ.
+
+Some tests include a **control**. A control is a variant of the test that must fail, and it proves that the test can see the problem. An entry says so when it has one.
+
+Every test runs from the `pg-replication/` folder as `bash scripts/NAME.sh`. The [README](../README.md#run-it) shows how to start the stack. Each test restores the starting state afterwards, so you can run the tests in any order.
+
+## Status at a glance
+
+Phase 1 is complete. Every Phase 1 capability has an automated test, and each test restores the stack when it ends. Part of Phase 2, the failover safety work, is also built and proven. The open items are listed in section 10.
+
+| Section | Theme | State |
+|---|---|---|
+| 1 | Replication and its price | Complete and automated. |
+| 2 | Moving the writer safely | Complete and automated. |
+| 3 | Fencing: never two writers | Built and automated. The write check is opt-in for each table. |
+| 4 | Automatic failover | Built and automated. The controller and the actor are single instances. |
+| 5 | Measuring loss and downtime | Measured. The detector is measured under a heartbeat only. |
+| 6 | Surviving crashes, load and network faults | Complete and automated. Real packet loss is not shown. |
+| 7 | Safe decisions and safe secrets | Complete and automated. Application clients are Phase 3. |
+| 8 | Backup and point-in-time recovery | Complete and automated for one timeline. |
+| 9 | Engineering practice | In place and enforced by the checks. |
 
 ## Contents
 
@@ -30,243 +44,239 @@ Each test restores the starting state afterwards, so you can run them in any ord
 ## 1. Replication and its price
 
 ### 1.1 A hot standby that builds itself and stays current
-- **Problem:** a second copy of the data must exist, be current, and be rebuildable without hand work.
-- **Mechanism:** streaming replication of the write-ahead log (WAL) with a replication slot that keeps the WAL the standby
-  still needs. The standby clones the primary on first start (`pg_basebackup`) and then follows it read-only.
+
+- **Problem:** A second copy of the data must exist, stay current and be rebuildable without hand work.
+- **Mechanism:** Streaming replication sends the write-ahead log (WAL) to the standby. A replication slot keeps the WAL that the standby still needs. The standby clones the primary on first start with `pg_basebackup` and then follows it read-only.
 - **Test:** `verify-replication.sh`, and the first step of every other test.
-- **Result:** a committed write appears on the standby; schema changes replicate; the standby refuses writes; a standby that was
-  down catches up from its slot (about 1 s for a small write).
-- **Limit:** one standby, same host.
-- **Register:** REP-01 to REP-04, OPS-03, FOV-05.
+- **Result:** A committed write appears on the standby. Schema changes replicate. The standby refuses writes. A standby that was down catches up from its slot in about 1 second for a small write.
+- **Limit:** There is one standby, on the same host.
+- **Register:** REP-01 to REP-04, OPS-03 and FOV-05.
 
 ### 1.2 Asynchronous or synchronous, switched without a restart
-- **Problem:** you need to choose between speed (async) and zero loss (sync), and change your mind while running.
-- **Mechanism:** `set-replication-mode.sh --mode async|sync|status` changes `synchronous_standby_names` with a reload.
-- **Result:** with the standby up a synchronous commit took 60 ms; with the standby stopped the commit **blocked** (8.6 s) until it
-  returned. That block is the price of zero loss. Under 16 concurrent clients, sync gave about **half the throughput** of async
-  (8,957 against 19,193 transactions per second, 1.79 ms against 0.83 ms latency).
-- **Register:** REP-05, REP-06, LOAD-01.
+
+- **Problem:** You must choose between speed (asynchronous) and zero loss (synchronous). You may need to change your mind while the system runs.
+- **Mechanism:** `set-replication-mode.sh --mode async|sync|status` changes `synchronous_standby_names` and reloads the configuration.
+- **Result:** With the standby up, a synchronous commit took 60 milliseconds. With the standby stopped, the commit blocked for 8.6 seconds until the standby returned. That block is the price of zero loss. Under 16 concurrent clients, synchronous replication gave about half the throughput of asynchronous replication. The rates were 8,957 and 19,193 transactions per second, and the latencies were 1.79 and 0.83 milliseconds.
+- **Register:** REP-05, REP-06 and LOAD-01.
 
 ### 1.3 A rebuilt standby does not inherit the writer's settings
-- **Problem:** a promoted standby that still names a synchronous standby blocks every write; a rebuilt node that keeps old
-  connection settings keeps an old password.
-- **Mechanism:** the rebuild replaces `primary_conninfo` and drops `synchronous_standby_names` in a new file moved into place.
-  Each node must hold at most one connection line.
-- **Result:** a defect found by test (88 stale lines had piled up), fixed, and checked after every recovery.
-- **Register:** REP-07, SEC-R2.
+
+- **Problem:** A promoted standby that still names a synchronous standby blocks every write. A rebuilt node that keeps old connection settings also keeps an old password.
+- **Mechanism:** The rebuild writes `primary_conninfo` into a new file and moves it into place. It also drops `synchronous_standby_names`. Each node must hold at most one connection line.
+- **Result:** A test found 88 stale connection lines. The defect is fixed, and every recovery now checks for it.
+- **Register:** REP-07 and SEC-R2.
+
+### 1.4 The modes with the standby down and killed
+
+- **Problem:** A stopped or killed standby must not cost the writer more than the chosen mode promised.
+- **Test:** `test-replication-modes.sh` switches the mode with no restart. It then runs asynchronous with the standby stopped, synchronous with the standby stopped, and synchronous with the standby killed (SIGKILL) during a commit.
+- **Result:** An asynchronous commit took 58 milliseconds with the standby down, and the replication slot kept the WAL for it. A synchronous commit was still waiting after 5 seconds. It completed 7.4 seconds after it started, when the standby returned. When the standby was killed mid-commit, the commit waited and finished after the restart. The standby then held all 3 acknowledged rows.
+- **Register:** REP-04, REP-05 and REP-06.
+
+### 1.5 The clone rebuild carries no synchronous setting
+
+- **Problem:** A node that is cloned from a writer must not copy the writer's synchronous setting.
+- **Test:** `test-clone-rebuild.sh` makes the new writer name a synchronous standby. It then rebuilds the old primary by cloning the writer.
+- **Result:** The test asserts that the source names a synchronous standby. The rebuilt node names none, streams, and holds identical rows. It can therefore be promoted without blocking writes.
+- **Register:** REP-07.
 
 ---
-
-### 1.4 The modes, with the standby down and killed
-- **Problem:** a standby that is stopped or killed must not cost the writer more than the mode promised.
-- **Test:** `test-replication-modes.sh`: the mode is switched with no restart; asynchronous with the standby stopped; synchronous with it stopped; synchronous with it SIGKILLed during a commit.
-- **Result:** asynchronous commits took **58 ms** with the standby down, and the replication slot kept the WAL for it. A synchronous commit waited with the standby down (still waiting after 5 s) and completed **7.4 s** later when it returned. Killed mid-commit, the commit waited and completed after the restart, and the standby held all 3 acknowledged rows.
-- **Register:** REP-04, REP-05, REP-06.
-- **Clone rebuild:** `test-clone-rebuild.sh` rebuilds the old primary by cloning the writer while the writer names a synchronous standby. The clone carries no sync setting, so the rebuilt node can be promoted without blocking writes (REP-07).
 
 ## 2. Moving the writer safely
 
 ### 2.1 Manual failover and fail-back
-- **Problem:** the writer is gone; make the standby the writer, then bring the old one back as a standby.
-- **Mechanism:** `promote-standby-to-primary.sh` promotes; `promote-primary-to-standby.sh` rebuilds the old primary
-  (`pg_rewind`, slot, standby settings) behind the new writer.
-- **Test:** `test-failover-roundtrip.sh`, a 17-step failover and fail-back that narrates every SQL statement and its result.
-- **Result:** roles swap and swap back; both nodes end with identical data.
-- **Register:** FOV-01, FOV-04, FOV-06; sequence in [docs/diagrams](../pg-replication/docs/diagrams/failover-sequence.md).
+
+- **Problem:** The writer is gone. The standby must become the writer, and the old node must later return as a standby.
+- **Mechanism:** `promote-standby-to-primary.sh` promotes the standby. `promote-primary-to-standby.sh` rebuilds the old primary behind the new writer with `pg_rewind`, a slot and standby settings.
+- **Test:** `test-failover-roundtrip.sh` runs 17 steps of failover and fail-back. It narrates every SQL statement and its result.
+- **Result:** The roles swap and swap back. Both nodes end with identical data.
+- **Register:** FOV-01, FOV-04 and FOV-06. The [failover sequence diagram](../pg-replication/docs/diagrams/failover-sequence.md) shows the steps.
 
 ### 2.2 Guard rails around the role change
-- **Problem:** promoting while the old primary still answers, or restarting the old primary after a failover, creates two writers.
-- **Mechanism:** a promotion guard (refuses while the old primary is reachable) and a split-brain guard (stops a restarted old
-  primary when the other node is already writable).
-- **Result:** the promotion exits 1 with "split-brain"; the restarted old primary is stopped again.
-- **Result (automated):** `test-guards.sh`. With the primary answering, the promotion was refused and the standby stayed a replica. A restarted old primary was stopped again by the start script, once its fence was lifted (promotion fences it first, see 3.1).
-- **Limit:** script checks, not real fencing; see section 3 for the fence.
-- **Patterns:** [promotion guard](../pg-replication/docs/patterns/promotion-guard.md), [split-brain guard](../pg-replication/docs/patterns/split-brain-guard.md), [verify after act](../pg-replication/docs/patterns/verify-after-act.md).
-- **Register:** FOV-02, FOV-03.
 
-### 2.3 A true divergence is rewound, and the loss is counted
-- **Problem:** the old primary accepted writes the new writer never saw. Taking it back must undo them.
-- **Test:** `test-divergence-rewind.sh`. The old primary acknowledges 3 writes the standby never gets; the standby is promoted
-  anyway; `pg_rewind` reports "servers diverged" and does a real rewind.
-- **Result:** the old primary rejoins identical to the new writer. The 3 acknowledged writes are **lost**: observed asynchronous data loss.
+- **Problem:** Two writers appear if the standby is promoted while the old primary still answers. They also appear if the old primary restarts after a failover.
+- **Mechanism:** A promotion guard refuses while the old primary is reachable. A split-brain guard stops a restarted old primary when the other node is already writable.
+- **Test:** `test-guards.sh`.
+- **Result:** With the primary answering, the promotion was refused and the standby stayed a replica. A restarted old primary was stopped again by the start script once its fence was lifted. Promotion fences the old primary first, as section 3.1 explains. A control showed that a start with one writer and one replica is allowed.
+- **Limit:** These are script checks, not real fencing. Section 3 describes the fence.
+- **Patterns:** [promotion guard](../pg-replication/docs/patterns/promotion-guard.md), [split-brain guard](../pg-replication/docs/patterns/split-brain-guard.md) and [verify after act](../pg-replication/docs/patterns/verify-after-act.md).
+- **Register:** FOV-02 and FOV-03.
+
+### 2.3 A true divergence is rewound and the loss is counted
+
+- **Problem:** The old primary accepted writes that the new writer never saw. Taking it back must undo them.
+- **Test:** `test-divergence-rewind.sh`. The old primary acknowledges 3 writes that the standby never receives. The standby is promoted anyway. `pg_rewind` then reports "servers diverged" and does a real rewind.
+- **Result:** The old primary rejoins identical to the new writer. The 3 acknowledged writes are lost, which is observed data loss under asynchronous replication.
 - **Register:** FOV-09.
 
 ### 2.4 Return to the starting state from anywhere, even after a kill
-- **Problem:** a failover script dies half way; the platform must recover by itself.
-- **Mechanism:** `restore-starting-state.sh` reads the current roles and repairs; a rebuild-pending marker makes a half-rewound
-  node be re-cloned, never trusted.
-- **Test:** `test-hard-kill.sh` SIGKILLs the round trip, the restore and the rotation at set delays.
-- **Result:** 16 kills of the round trip and 10 of the restore all recovered. It found four real faults (a stuck split-brain
-  guard, `pg_rewind` on a half-rewound directory, status queries during shutdown, a wedged standby reported as success), all fixed.
-- **Pattern:** [kill-test harness](../pg-replication/docs/patterns/kill-test-harness.md).
-- **Register:** FOV-07, FOV-08, OPS-01.
 
----
+- **Problem:** A failover script may die half way. The platform must then recover by itself.
+- **Mechanism:** `restore-starting-state.sh` reads the current roles and repairs them. A rebuild-pending marker makes a half-rewound node be cloned again and never trusted.
+- **Test:** `test-hard-kill.sh` sends SIGKILL to the round trip, the restore and the rotation at set delays.
+- **Result:** All 16 kills of the round trip and all kills of the restore were recovered. The test found four real faults. They were a stuck split-brain guard, `pg_rewind` on a half-rewound directory, status queries during shutdown, and a wedged standby that was reported as a success. All four are fixed.
+- **Pattern:** [kill-test harness](../pg-replication/docs/patterns/kill-test-harness.md).
+- **Register:** FOV-07, FOV-08 and OPS-01.
 
 ### 2.5 A second failure during a rejoin
-- **Problem:** the writer dies while the old node is being rebuilt as a standby. Both nodes are down, and one of them has a half-changed data directory.
-- **Test:** `test-rejoin-failure.sh`: the new writer is killed once the rebuild marker appears; the restore must bring the stack back with every acknowledged row on both nodes. A `--control` run has no kill and shows the marker is what the kill leaves behind.
-- **Result:** the restore first refused, with both nodes stopped. It now starts the writer candidate (the node without the replica marker, else the newer timeline read from the stopped volume), then restores from there. After the fix, **8 of 8 acknowledged rows** were on both nodes, with equal checksums.
+
+- **Problem:** The writer dies while the old node is being rebuilt as a standby. Both nodes are then down, and one has a half-changed data directory.
+- **Test:** `test-rejoin-failure.sh` kills the new writer once the rebuild marker appears. The restore must then bring the stack back with every acknowledged row on both nodes. A `--control` run has no kill, and it shows that the marker is what the kill leaves behind.
+- **Result:** The restore first refused to act when both nodes were stopped. It now starts the writer candidate. That is the node without the replica marker, or else the node on the newer timeline, which is read from the stopped volume. It then restores from there. After the fix, all 8 acknowledged rows were on both nodes, with equal checksums.
+- **Limit:** The test kills the writer at one point only, while the marker exists.
 - **Register:** FOV-11.
+
+---
 
 ## 3. Fencing: never two writers
 
 ### 3.1 Start-time fence
-- **Problem:** the old primary is started again with a plain `docker start`, bypassing every script.
-- **Mechanism:** the old node's data directory gets `standby.signal`, so any start comes up read-only.
+
+- **Problem:** The old primary may be started again with a plain `docker start`, which bypasses every script.
+- **Mechanism:** The old node's data directory receives a `standby.signal` file, so any start comes up read-only.
 - **Test:** `test-fencing.sh`.
-- **Result:** the fenced node came up in recovery and **refused a write**. Control (fence lifted): it came up writable and
-  **accepted** the write, the split-brain the test must be able to see.
-- **Limit:** fences at the next start only; a node that keeps running is handled by the lease (3.2).
+- **Result:** The fenced node came up in recovery and refused a write. In the control, the fence was lifted. The node then came up writable and accepted the write. That control is the split-brain that the test must be able to see.
+- **Limit:** The fence acts at the next start only. The lease in section 3.2 handles a node that keeps running.
 - **Pattern:** [split-brain guard](../pg-replication/docs/patterns/split-brain-guard.md).
 - **Register:** FOV-10.
 
 ### 3.2 A lease and a guard stop a running writer
-- **Problem:** the old writer is partitioned but still running, and cannot be killed.
-- **Mechanism:** the controller renews a lease row on the writer (`fence_lease`, using the writer's own clock). A guard beside the
-  writer stops it when the lease expires.
-- **Test:** `test-lease-fence.sh`, then `test-lease-failover.sh`.
-- **Result:** cut off, the writer's last write was accepted 5.3 s after the cut and the first was refused at 5.6 s. In a
-  failover of an isolated writer there was a gap of **8.8 to 9.6 s and no overlap** between old and new writer. Control (no
-  guard): the old writer kept writing and there were **14 to 16 s of two writers**.
-- **Limit and cost:** safety is bought with availability. A controller outage longer than the lease time stops a healthy writer. A
-  paused process that resumes can write once before its guard looks; the write check (3.3) closes that for the tables that carry it.
-- **Pattern:** [lease and guard](../pg-replication/docs/patterns/lease-and-guard.md), [epoch](../pg-replication/docs/patterns/epoch-fencing-token.md).
-- **Register:** LEASE-01, LEASE-02.
+
+- **Problem:** The old writer is partitioned but still running, and it cannot be killed.
+- **Mechanism:** The controller renews a lease row on the writer, using the writer's own clock. A guard beside the writer stops it when the lease expires.
+- **Test:** `test-lease-fence.sh` and then `test-lease-failover.sh`.
+- **Result:** After the writer was cut off, its last write was accepted 5.3 seconds later, and the first refusal came at 5.6 seconds. In a failover of an isolated writer there was a gap of 8.8 to 9.6 seconds and no overlap between the old and new writer. In the control there was no guard. The old writer kept writing, and there were 14 to 16 seconds of two writers.
+- **Limit:** Safety is bought with availability. A controller outage that is longer than the lease time stops a healthy writer.
+- **Patterns:** [lease and guard](../pg-replication/docs/patterns/lease-and-guard.md) and [epoch](../pg-replication/docs/patterns/epoch-fencing-token.md).
+- **Register:** LEASE-01 and LEASE-02.
 
 ### 3.3 The write itself checks the lease
-- **Problem:** a writer that is paused (a long pause, a frozen host) while its lease runs out can resume and write once before its guard
-  looks, because the guard polls from outside.
-- **Mechanism:** a trigger on the table reads the lease inside every write and refuses it if the lease has expired.
-- **Test:** `test-resume-fence.sh`: the writer is frozen for 8 s with a 5 s lease and a client write waiting.
-- **Result:** with no check the write was **accepted 3.1 s after the lease ran out**; with the check it was refused with "fenced" and nothing was
-  written. A write under a valid lease, and a write on a node with no lease, were accepted.
-- **Limit:** opt-in per table, the node's own clock, lease time rather than a comparison of epochs.
+
+- **Problem:** A writer that is paused while its lease runs out can resume and write once before its guard looks. The guard polls from outside, so it can arrive too late.
+- **Mechanism:** A trigger on the table reads the lease inside every write. It refuses the write if the lease has expired.
+- **Test:** `test-resume-fence.sh` freezes the writer for 8 seconds with a 5-second lease and a client write waiting.
+- **Result:** With no check, the write was accepted 3.1 seconds after the lease ran out. With the check, it was refused with the message "fenced", and nothing was written. A write under a valid lease was accepted. So was a write on a node with no lease.
+- **Limit:** The check is opt-in for each table. It uses the node's own clock, and it compares lease time, not epochs.
 - **Pattern:** [lease and guard](../pg-replication/docs/patterns/lease-and-guard.md).
 - **Register:** LEASE-04.
 
 ### 3.4 The lease follows the writer
-- **Problem:** after a failover the new writer must be fenced too, or it is unprotected.
-- **Mechanism:** the actor installs a lease at the new epoch, starts a guard beside the new writer, and repoints the controller.
-- **Test:** `test-lease-handover.sh`, including a kill part way through the hand-over.
-- **Result:** the new writer's lease was at epoch 1 and renewed over 9 s; with renewals stopped it was fenced within 5.8 s; a kill
-  during the hand-over was repaired by a re-run.
+
+- **Problem:** After a failover the new writer must be fenced too. Otherwise it is unprotected.
+- **Mechanism:** The actor installs a lease at the new epoch and starts a guard beside the new writer. It then points the controller at the new writer.
+- **Test:** `test-lease-handover.sh`, which includes a kill part way through the hand-over.
+- **Result:** The new writer's lease was at epoch 1 and was renewed over 9 seconds. When renewals stopped, the writer was fenced within 5.8 seconds. A re-run repaired the kill during the hand-over.
 - **Register:** LEASE-03.
 
 ### 3.5 The fail-back works the same way
-- **Test:** `test-lease-failback.sh`: fail over an isolated writer, rebuild the old node as a standby, then fail back.
-- **Result:** the epoch went to 2, the node that was first the writer held a lease at epoch 2 and kept it renewed, and the isolated writer was stopped. Two runs.
+
+- **Test:** `test-lease-failback.sh` fails over an isolated writer, rebuilds the old node as a standby and then fails back.
+- **Result:** The epoch went to 2. The node that was first the writer held a lease at epoch 2 and kept it renewed. The isolated writer was stopped. Two runs gave the same outcome.
 - **Register:** LEASE-05.
 
 ---
 
 ## 4. Automatic failover
 
-### 4.1 A failure detector that is not fooled by a pause
-- **Problem:** promoting a healthy writer because the observer, not the writer, has a problem.
-- **Mechanism:** two vantage points. A controller probes the writer; the standby reports whether the writer still feeds it.
-  `fail-over` needs three failed probes in a row **and** a silent standby. Verdicts include `hold-writer-alive` (controller cut
-  off, standby still hears the writer) and `cannot-fail-over` (both views unavailable).
-- **Test:** `test-detector.sh` (7 steps) and 8 unit tests of the pure decision function.
-- **Result:** a 3 s freeze produced no failover; a hung writer was declared after 6.4 s; a controller cut off from a live writer
-  never failed over. **Control (the trap):** with an idle writer and a short witness window the same cut caused a **false failover**.
-  An idle writer talks to its standby only about every 30 s, so a witness window shorter than that fools the detector.
+### 4.1 A failure detector that a pause does not fool
+
+- **Problem:** A healthy writer may be promoted because the observer has a problem and the writer does not.
+- **Mechanism:** The detector uses two vantage points. A controller probes the writer, and the standby reports whether the writer still feeds it. A verdict of `fail-over` needs three failed probes in a row and a silent standby. Other verdicts include `hold-writer-alive`, where the controller is cut off but the standby still hears the writer. Another is `cannot-fail-over`, where both views are unavailable.
+- **Test:** `test-detector.sh` has 7 steps, and the pure decision function has 8 unit tests.
+- **Result:** A 3-second freeze produced no failover. A hung writer was declared after 6.4 seconds. A controller that was cut off from a live writer never failed over. In the control, the writer was idle and the witness window was short. The same cut then caused a false failover. An idle writer talks to its standby only about every 30 seconds, so a shorter witness window fools the detector.
 - **Pattern:** [witness detector](../pg-replication/docs/patterns/witness-detector.md).
 - **Register:** DET-01.
 
 ### 4.2 An actor that fences, promotes and records an epoch
-- **Problem:** turn the decision into a safe promotion, and make it survive its own failure.
-- **Mechanism:** `act-on-failover.sh` does three steps in order: raise the epoch (a number that only goes up), stop the old
-  writer, promote. A step already done is skipped, so a re-run finishes the same failover at the same epoch.
-- **Test:** `test-auto-failover.sh`; `test-actor-kill.sh` kills it after each step; `test-actor-timed-kill.sh` SIGKILLs its whole
-  process group at 0.1 to 0.9 s.
-- **Result:** a client could write again **2.8 to 2.9 s** after a crash (8.0 s once) and **7.2 to 8.3 s** after a hung writer; a
-  2 s freeze did nothing. Every kill, including seven that landed inside the promote script, recovered to one epoch and a
-  writable standby.
-- **Pattern:** [restartable actor](../pg-replication/docs/patterns/restartable-actor.md), [epoch](../pg-replication/docs/patterns/epoch-fencing-token.md).
-- **Register:** ACT-01, ACT-02, ACT-04.
+
+- **Problem:** The decision must become a safe promotion, and the actor must survive its own failure.
+- **Mechanism:** `act-on-failover.sh` does three steps in order. It raises the epoch, which is a number that only goes up. It stops the old writer. It then promotes the standby. A step that is already done is skipped, so a re-run finishes the same failover at the same epoch.
+- **Test:** `test-auto-failover.sh` runs the whole path. `test-actor-kill.sh` kills the actor after each step. `test-actor-timed-kill.sh` kills its whole process group between 0.1 and 0.9 seconds after it starts.
+- **Result:** A client could write again 2.8 to 2.9 seconds after a crash, and 8.0 seconds once. After a hung writer the delay was 7.2 to 8.3 seconds. A 2-second freeze caused no action. Every kill recovered to one epoch and a writable standby, including seven kills that landed inside the promote script.
+- **Patterns:** [restartable actor](../pg-replication/docs/patterns/restartable-actor.md) and [epoch](../pg-replication/docs/patterns/epoch-fencing-token.md).
+- **Register:** ACT-01, ACT-02 and ACT-04.
 
 ### 4.3 Only one actor acts
-- **Problem:** two actors decide at once and both promote.
-- **Mechanism:** a maintenance lock (a host-local folder lock with dead-holder takeover).
-- **Test:** `test-two-actors.sh`. **Control** with the lock off: both went ahead, and the control found a real race on the epoch file.
-- **Limit:** one host. A distributed lock needs a consensus store, which is out of scope.
+
+- **Problem:** Two actors may decide at the same moment and both promote.
+- **Mechanism:** A maintenance lock allows one actor at a time. It is a folder lock on one host, and it takes over from a dead holder.
+- **Test:** `test-two-actors.sh`. In the control the lock is off. Both actors then went ahead, and the control exposed a real race on the epoch file.
+- **Limit:** The lock works on one host only. A distributed lock needs a consensus store, which is out of scope.
 - **Register:** ACT-03.
 
 ### 4.4 The controller can die
-- **Problem:** the controller is on the write path through the lease.
+
+- **Problem:** The controller is on the write path through the lease.
 - **Test:** `test-controller-kill.sh`.
-- **Result:** restarted within the lease time, nothing was refused and no failover was decided; left dead, the writer was stopped in
-  about 5.3 s. This is a **deliberate trade-off**: run the controller under a supervisor and set the lease time longer than its restart time.
+- **Result:** When the controller restarted within the lease time, nothing was refused and no failover was decided. When it was left dead, its guard stopped the writer in about 5.3 seconds. This is a deliberate trade-off. Run the controller under a supervisor, and set the lease time longer than the restart time.
 - **Register:** CTL-01.
 
 ### 4.5 The window after failing over from synchronous replication
-- **Problem:** after a failover the new writer has no standby, so it runs asynchronously until sync is on again.
+
+- **Problem:** After a failover the new writer has no standby, so it runs asynchronously until synchronous replication is switched on again.
+- **Mechanism:** The wanted mode is recorded when it is set. After the old node has rejoined and streams, the rejoin switches synchronous replication on for the new writer.
 - **Test:** `test-sync-after-failover.sh`.
-- **Mechanism:** the wanted mode is recorded when it is set; once the old node has rejoined and streams, the rejoin switches sync on for the new writer.
-- **Result:** the new writer acknowledged a write with one copy; the rejoin closed the window with no manual step after **8.0 s** from the crash.
-- **Limit:** the window is as long as the rejoin takes (a crashed node is re-cloned). The actor cannot switch sync on itself, because sync with no standby blocks every write.
+- **Result:** The new writer acknowledged a write with one copy only. The rejoin closed the window with no manual step, 8.0 seconds after the crash.
+- **Limit:** The window lasts as long as the rejoin takes, and a crashed node is cloned again. The actor cannot switch synchronous replication on itself, because that blocks every write while there is no standby.
 - **Register:** SYNC-01.
 
 ---
 
 ## 5. Measuring loss and downtime
 
-Definitions: **RPO** is acknowledged writes missing on the surviving site; **RTO** is the time until a client write succeeds again.
+The recovery point objective (RPO) is the number of acknowledged writes that are missing on the surviving site. The recovery time objective (RTO) is the time until a client write succeeds again.
 
 | Measurement | Method | Result |
 |---|---|---|
-| **RPO, async** (RPO-01) | Isolate the standby for a set lag, crash the writer, promote at once, compare a write ledger | Lag 0 s lost 0; lag 1 s lost 6; lag 3 s lost 17 to 18: about **6 writes per second of lag**, the write rate |
-| **RPO, sync** (RPO-02) | The same, with synchronous replication | **0 lost** in every trial. **Control** (commit level `local`): 17 lost, so the test can see loss. Price: writes blocked 3.4 to 3.7 s while the standby was cut off |
-| **RPO under gradual delay** (RPO-03) | Toxiproxy latency on the replication link | Loss tracks delay, not just all-or-nothing partitions |
-| **RTO, scripted** (RTO-01) | Prober writes about every 100 ms through a clean stop or a crash | **312 to 726 ms** crash, **369 to 482 ms** clean stop, median 1.4 to 1.9% of a monthly 99.999% budget (26 s) |
-| **RTO, automatic** (ACT-01) | Same prober with the detector and actor deciding | **2.8 to 8.3 s**; detection is nearly all of it |
+| RPO, asynchronous (RPO-01) | Isolate the standby for a set lag, crash the writer, promote at once and compare a write ledger. | A lag of 0 seconds lost 0 writes, 1 second lost 6, and 3 seconds lost 17 to 18. That is about 6 writes for each second of lag, which is the write rate. |
+| RPO, synchronous (RPO-02) | The same test with synchronous replication. | No writes were lost in any trial. The control used commit level `local` and lost 17, so the test can see a loss. The price was a write block of 3.4 to 3.7 seconds while the standby was cut off. |
+| RPO under gradual delay (RPO-03) | Add Toxiproxy latency to the replication link. | The loss tracks the delay and is not only an all-or-nothing partition. |
+| RTO, scripted (RTO-01) | A prober writes about every 100 milliseconds through a clean stop or a crash. | A crash gave 312 to 726 milliseconds. A clean stop gave 369 to 482 milliseconds. The median is 1.4 to 1.9 per cent of a monthly 99.999 per cent budget of 26 seconds. |
+| RTO, automatic (ACT-01) | The same prober with the detector and the actor deciding. | The result was 2.8 to 8.3 seconds. Detection is nearly all of it. |
 
-Run `measure-recovery.sh` (about 13 minutes); it writes [recovery-report.md](../pg-replication/docs/recovery-report.md).
-**The lesson:** a scripted promotion is under a second, and detection dominates the real RTO.
+`measure-recovery.sh` takes about 13 minutes, and it writes the [recovery report](../pg-replication/docs/recovery-report.md).
+
+**The lesson:** A scripted promotion takes under a second. Detection dominates the real RTO.
 
 ---
 
 ## 6. Surviving crashes, load and network faults
 
 ### 6.1 Crash recovery is correct
+
 - **Test:** `measure-recovery.sh --scenarios crash-matrix`.
-- **Result:** standby killed: 0 failed writes, caught up from its slot. Writer killed and restarted: 0 acknowledged writes lost,
-  0 index damage (`amcheck`), outage 3.4 to 3.5 s for 3 s down. Killed in an uncommitted 50,000-row transaction: 0 uncommitted rows
-  survived. Killed during a checkpoint (confirmed in the log in 3 of 3 trials): 0 lost, 0 index damage.
-- **Limit:** a process crash, not a power cut: the host keeps its page cache, so fsync behaviour is not tested.
+- **Result:** When the standby was killed, there were no failed writes, and it caught up from its slot. When the writer was killed and restarted, no acknowledged write was lost and the indexes were undamaged, as `amcheck` confirmed. The outage was 3.4 to 3.5 seconds for 3 seconds of downtime. A kill inside an uncommitted 50,000-row transaction left no uncommitted rows. A kill during a checkpoint, confirmed in the log in 3 of 3 trials, lost nothing and damaged no index.
+- **Limit:** A process crash is not a power cut. The host keeps its page cache, so the test does not show fsync behaviour.
 - **Register:** CRS-01.
 
 ### 6.2 Concurrent load keeps money exact
-- **Test:** `test-load.sh`: 16 clients, idempotency keys from a million values, a crash 5 s in.
-- **Result:** 287,791 transactions, 0 failed, 37,721 duplicates rejected, **balances minus payments exactly 0**, standby identical, also after a writer kill.
-- **Limit:** database-level idempotency. A client that retries through a failover belongs to the service layer (Phase 3).
+
+- **Test:** `test-load.sh` runs 16 clients with idempotency keys drawn from a million values. It kills the writer 5 seconds in.
+- **Result:** There were 287,791 transactions and none failed. The database rejected 37,721 duplicates. The balances minus the payments came to exactly 0, and the standby was identical, also after the writer kill.
+- **Limit:** This is idempotency at database level. A client that retries through a failover belongs to Phase 3.
 - **Register:** LOAD-01.
 
 ### 6.3 Network faults: delay, a cut link and silence
-- **Test:** `test-network-faults.sh` (Toxiproxy on the replication link).
-- **Result:** async commits are unaffected by 200 or 1,000 ms of delay, but the standby is stale by about the delay; a sync commit
-  rises by the round trip (about 400 ms for 200 ms each way). A cut link blocks sync commits until the standby retries: 4.8 s after
-  healing at the default 5 s retry interval, 0.3 s at 500 ms. **A silent link (connection open, data swallowed) is noticed only
-  after `wal_sender_timeout`: 60 s by default, 4 s with 5 s timeouts.**
-- **Lesson:** detection time, not promotion time, is the largest part of an RTO. Short timeouts shorten it but raise the risk of false alarms.
+
+- **Test:** `test-network-faults.sh` puts Toxiproxy on the replication link.
+- **Result:** Asynchronous commits are unaffected by 200 or 1,000 milliseconds of delay, but the standby is stale by about the delay. A synchronous commit rises by the round trip, which is about 400 milliseconds for 200 milliseconds each way. A cut link blocks synchronous commits until the standby retries. That took 4.8 seconds after healing with the default 5-second retry interval, and 0.3 seconds with a 500-millisecond interval. A silent link keeps its connection open but swallows the data. The writer notices only after `wal_sender_timeout`, which is 60 seconds by default and 4 seconds with 5-second timeouts.
+- **Lesson:** Detection time is the largest part of an RTO. Shorter timeouts reduce it, but they raise the risk of false alarms.
 - **Register:** NET-01 to NET-03.
 
 ### 6.4 More link faults: jitter, bandwidth, one-way silence and a dropping link
+
 - **Test:** `test-link-faults.sh`.
-- **Result:**
-  - **Jitter** (100 ms plus or minus 100): asynchronous commits unaffected (80 to 84 ms); synchronous commits rose from a median of 79 to 87 ms to **364 to 385 ms**, with a wide spread.
-  - **Bandwidth limit** (512 KB/s): one 8 MB write left the standby 4 to 5 MB behind; a synchronous commit issued then waited **14.2 s** behind the backlog.
-  - **One-way silence** (5 s timeouts): with the standby's replies lost, the standby **still had the data** while the writer dropped it after 4.0 s; with the writer's WAL lost, the standby did not have it and the connection dropped after 4.7 s.
-  - **A link that drops every connection after 256 KB:** replication **stalls completely**, because each reconnect restarts at the start of the current WAL segment (the standby's log shows the same start position every time).
-- **Limit:** TCP hides packet loss, so loss itself is not shown (drops and silence are its effects); the byte budget at which replication finishes is not mapped.
+- **Result for jitter:** The delay was 100 milliseconds, plus or minus 100. Asynchronous commits stayed at 80 to 84 milliseconds. The median synchronous commit rose from 79 to 87 milliseconds to 364 to 385 milliseconds, with a wide spread.
+- **Result for a bandwidth limit:** At 512 KB per second, one 8 MB write left the standby 4 to 5 MB behind. A synchronous commit issued then waited 14.2 seconds behind the backlog.
+- **Result for one-way silence:** The timeouts were 5 seconds. When the standby's replies were lost, the standby still had the data, but the writer dropped it after 4.0 seconds. When the writer's WAL was lost, the standby did not have the data, and the connection dropped after 4.7 seconds.
+- **Result for a dropping link:** When the link dropped every connection after 256 KB, replication stalled completely. Each reconnect restarts at the start of the current WAL segment, and the standby's log shows the same start position every time.
+- **Limit:** TCP (the Transmission Control Protocol) hides packet loss, so loss itself is not shown. Drops and silence are its effects. The byte budget at which replication finishes is not mapped.
 - **Register:** NET-04 to NET-07.
 
 ### 6.5 A dead standby cannot fill the primary's disk
-- **Test:** `test-slot-limit.sh` (writes 1.5 GB of WAL; needs 6 GB free).
-- **Result:** the slot went `reserved` to `lost` at about 1 GB; the primary's WAL peaked at 944 MB against a bound of 1,536 MB and
-  accepted a write every round; restore re-cloned the standby. **Defect found by the test:** a re-cloned standby kept an old slot that no
-  longer protected WAL; the rebuild now replaces it.
+
+- **Test:** `test-slot-limit.sh` writes 1.5 GB of WAL and needs 6 GB of free disk.
+- **Result:** The slot went from `reserved` to `lost` at about 1 GB. The primary's WAL peaked at 944 MB against a bound of 1,536 MB, and the primary accepted a write in every round. The restore cloned the standby again. The test found a defect: a standby that was cloned again kept an old slot that no longer protected the WAL. The rebuild now replaces that slot.
 - **Register:** OPS-04.
 
 ---
@@ -274,20 +284,20 @@ Run `measure-recovery.sh` (about 13 minutes); it writes [recovery-report.md](../
 ## 7. Safe decisions and safe secrets
 
 ### 7.1 Decisions never read a lagging replica
-- **Problem:** two debits of 100 on a balance of 100, each decided on a stale replica.
+
+- **Problem:** Two debits of 100 arrive for a balance of 100, and each is decided on a stale replica.
 - **Test:** `test-replica-lag.sh`.
-- **Result:** the wrong way approved both and the account went to **-100**; the guarded path declined the second and stayed at 0.
-  A replica read after waiting for the replay position was correct.
+- **Result:** The wrong way approved both debits, and the account went to -100. The guarded path declined the second debit, and the account stayed at 0. A replica read after waiting for the replay position was correct.
 - **Pattern:** [decisions read the writer](../pg-replication/docs/patterns/decisions-read-the-writer.md).
-- **Limit:** proves the library guard and the anomaly, not that a future service obeys the rule.
+- **Limit:** The test proves the library guard and the anomaly. It does not prove that a future service obeys the rule.
 - **Register:** DEC-01.
 
 ### 7.2 Rotating database secrets with no failed write
-- **Problem:** change the replication and superuser passwords across two nodes under live traffic.
-- **Mechanism:** replication secret by **overlap** (a second role, alternating names, then retire the old one); superuser in
-  place; rollback before the files change; converges when re-run; a maintenance lock stops rotation, rebuild and role change overlapping.
-- **Test:** `test-rotation.sh` (async and `ROTATION_MODE=sync`), `test-maintenance-lock.sh`, `test-hard-kill.sh --target rotate`.
-- **Result:** **0 failed writes** in every run; 25 SIGKILLs of the rotation all recovered on re-run.
+
+- **Problem:** The replication and superuser passwords must change across two nodes under live traffic.
+- **Mechanism:** The replication secret rotates by overlap. A second role is created with alternating names, and then the old role is retired. The superuser secret changes in place. A rollback is possible before the files change. A re-run converges. A maintenance lock stops a rotation, a rebuild and a role change from overlapping.
+- **Test:** `test-rotation.sh` in asynchronous mode and with `ROTATION_MODE=sync`, `test-maintenance-lock.sh`, and `test-hard-kill.sh --target rotate`.
+- **Result:** No write failed in any run. All 25 kills of the rotation recovered on a re-run.
 - **Guide:** [secrets rotation](../pg-replication/docs/secrets-rotation.md).
 - **Register:** SEC-R1 to SEC-R4.
 
@@ -298,42 +308,39 @@ Run `measure-recovery.sh` (about 13 minutes); it writes [recovery-report.md](../
 Replication copies a mistake as faithfully as it copies data. Only a backup with the archived log can undo one.
 
 ### 8.1 A mistaken delete is undone from a base backup and the archive
-- **Problem:** every row is deleted by mistake on the primary. The standby loses them within seconds.
-- **Mechanism:** the primary archives completed WAL segments (`archive_command`). A base backup is taken with `pg_basebackup -X stream`. A copy is restored into a separate container, to a recorded WAL position (LSN) before the delete, and promoted there.
-- **Test:** `test-point-in-time.sh` (5 steps, with a control).
-- **Result:** the delete reached the standby within 2 s. The restore to the recorded LSN gave **150 rows and the checksum from before the delete**. The control, recovery to the end of the archive, gave **0 rows**: the position is what makes the difference.
-- **Limit:** one timeline (a failover between the backup and the recovery is not tested); a target by position, not time; a separate copy, not an in-place repair; the archive and the backup are volumes on the same host, with no off-site copy and no retention policy.
+
+- **Problem:** Every row is deleted by mistake on the primary, and the standby loses the rows within seconds.
+- **Mechanism:** The primary archives completed WAL segments with `archive_command`. A base backup is taken with `pg_basebackup -X stream`. A copy is restored into a separate container, up to a recorded WAL position, which is a log sequence number (LSN) before the delete. The copy is then promoted at that point.
+- **Test:** `test-point-in-time.sh` has 5 steps and a control.
+- **Result:** The delete reached the standby within 2 seconds. The restore to the recorded LSN gave 150 rows and the checksum from before the delete. The control recovered to the end of the archive and gave 0 rows. The position is what makes the difference.
+- **Limit:** The test covers one timeline. A failover between the backup and the recovery is not tested. The target is a position, not a time. The copy is separate, so it is not an in-place repair. The archive and the backup are volumes on the same host, with no off-site copy and no retention policy.
 - **Register:** BAK-01.
+
+---
 
 ## 9. Engineering practice that makes the proof trustworthy
 
-- **Every claim is re-runnable.** The register's status says Proven (auto), Proven (manual), Partial or Not proven. Nothing is
-  claimed that has not been run.
-- **Negative controls** ([pattern](../pg-replication/docs/patterns/negative-control.md)). The tests that matter include a variant that must fail (no guard, lock off, fence lifted, `commit=local`),
-  so a pass means the test could have seen the problem. Several controls found real defects.
-- **Evidence-led defects.** Tests found and fixed: a stuck split-brain guard, `pg_rewind` on a half-rewound node, a wedged
-  standby reported as success, 88 piled-up connection lines, an invalid replication slot reused after a rebuild, a race on the epoch file.
-- **House standards, checked by tools.** Shell scripts follow a deterministic Bash standard (`lint-scripts.sh`); Python follows its
-  own (ruff, mypy strict, pytest in a pinned container, no waivers). `run-all-checks.sh` runs lint, documents, Python and the round trip.
-- **An audit trail.** Every script writes a millisecond UTC run log; `run-with-log-folder.sh --merge` merges a whole run into one timeline.
-- **Hygiene and timeline checks.** `check-hygiene.sh` checks that host scripts make no direct `docker`, `psql` or `pgbench` calls, that every published port is on loopback, and that no tracked file holds a private key or token. `check-run-timeline.sh` checks that a merged run timeline is ordered and well formed. Both run in `run-all-checks.sh`, and both were shown to fail on a bad copy (ENG-02, ENG-03, OBS-02).
-- **Each test that found a defect says so.** Found this session: a restore that refused a double stop, a fence that picked up every volume once a node had several, and a hygiene check that read a failed command as "no match".
-- **One place for each kind of call.** Database calls live in `lib/database.sh`, and most `docker` calls in `lib/container.sh`. The libraries for a job (`fence.sh`, `lease.sh`, `backup.sh`, `access.sh`) run `docker` themselves, as CLAUDE.md records.
+- **Every claim can be run again.** The register's status says whether a result is automated, manual, partial or not proven. Nothing is claimed that has not been run.
+- **Negative controls.** The tests that matter include a variant that must fail, for example with no guard, with the lock off, with the fence lifted, or with `commit=local`. A pass therefore means that the test could have seen the problem. Several controls found real defects. The [negative control pattern](../pg-replication/docs/patterns/negative-control.md) explains the method.
+- **Defects that the tests found.** The tests found and fixed six defects in the early work. A split-brain guard was stuck. `pg_rewind` ran on a half-rewound node. A wedged standby was reported as a success. Connection lines piled up to 88. An invalid replication slot was reused after a rebuild. The epoch file had a race.
+- **More defects from the Phase 1 work of November 2026.** A restore refused a double stop. A fence picked up every volume once a node had several. A hygiene check read a failed command as "no match".
+- **House standards, checked by tools.** Shell scripts follow a deterministic Bash standard that `lint-scripts.sh` checks. Python follows its own standard, with ruff, mypy in strict mode and pytest in a pinned container, and no waivers. `run-all-checks.sh` runs lint, documents, Python, hygiene, timeline and the round trip.
+- **An audit trail.** Every script writes a run log with millisecond timestamps in Coordinated Universal Time (UTC). `run-with-log-folder.sh --merge` merges a whole run into one timeline.
+- **Hygiene and timeline checks.** `check-hygiene.sh` checks three rules. Host scripts make no direct `docker`, `psql` or `pgbench` calls. Every published port is on loopback. No tracked file holds a private key or an access token. `check-run-timeline.sh` checks that a merged timeline is ordered and well formed. Both checks run in `run-all-checks.sh`, and both were shown to fail on a bad copy.
+- **One place for each kind of call.** Database calls live in `lib/database.sh`, and most `docker` calls live in `lib/container.sh`. The libraries that serve one job run `docker` themselves. Those libraries are `fence.sh`, `lease.sh`, `backup.sh` and `access.sh`.
 
 ---
 
 ## 10. What this catalogue does not cover
 
-Open and deliberately out of scope for now (details in the register, section 4):
+These items are open or deliberately out of scope. The register's section 4 gives the detail.
 
-- **Point-in-time recovery across a failover, an off-site archive, a retention policy, and recovery by time** (BAK-01 limits).
-- **More than one standby** (a quorum of synchronous standbys) (P1-08, not tested).
-
-- **The write check on every table, a clock step, and a comparison of epochs between nodes** (GAP-03). The check exists (3.3) but is opt-in per table.
-- **A replicated controller** (needs a consensus store) (GAP-07).
-- **Real packet loss and reordering** (needs `tc netem`), and the byte budget at which a dropping link replicates (GAP-11).
-- **The application layer** (Phase 2): outbox, idempotent consumers, per-aggregate sequences, an independent invariant checker (GAP-12).
-- **The service layer** (Phase 3): a client with idempotency keys that reconnects through a failover, RTO under realistic load, rotation
-  for application clients (GAP-10, GAP-15, SEC-06).
-- **Hot-hot, multi-writer and the chaos catalogue** (Phases 4 to 6).
-- **Power-loss testing, a real network, several machines, real secrets management.** This is a single-host teaching platform.
+- **Point-in-time recovery beyond one timeline.** A recovery across a failover, an off-site archive, a retention policy and recovery by time are not covered.
+- **A quorum of synchronous standbys.** Every synchronous result is for one standby.
+- **The write check on every table.** The check exists, but it is opt-in for each table. A clock step and a comparison of epochs between nodes are not tested (GAP-03).
+- **A replicated controller.** This needs a consensus store (GAP-07).
+- **Real packet loss and reordering.** These need `tc netem`. The byte budget at which a dropping link replicates is also not mapped (GAP-11).
+- **The application layer.** This is Phase 2. It covers the outbox, idempotent consumers, per-aggregate sequences and an independent invariant checker (GAP-12).
+- **The service layer.** This is Phase 3. It covers a client with idempotency keys that reconnects through a failover, recovery time under realistic load, and secret rotation for application clients (GAP-10, GAP-15 and SEC-06).
+- **Hot-hot operation, multi-writer operation and the chaos catalogue.** These are Phases 4 to 6.
+- **Power-loss testing, a real network, several machines and real secrets management.** This is a single-host teaching platform.
