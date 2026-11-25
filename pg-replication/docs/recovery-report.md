@@ -1,13 +1,19 @@
-# Recovery measurements: RPO and RTO
+# Recovery measurements: recovery point and recovery time
 
-Written by write-recovery-report.sh on 2026-11-21 14:03:17 UTC, at commit b6108b4.
-PostgreSQL 16.16 (Debian 16.16-1.pgdg13+1), two nodes in Docker Compose on one machine.
-A write about every 100 ms. RTO target: 30 s beyond the decision delay.
-This file is overwritten by every run.
+Written by write-recovery-report.sh on 2026-11-25 13:15:24 Coordinated Universal Time (UTC),
+at commit 7a6c529 plus uncommitted changes.
+The server was PostgreSQL 16.16 (Debian 16.16-1.pgdg13+1), with two nodes in Docker Compose on one machine.
+The prober wrote about every 100 milliseconds.
+The recovery time target was 30 seconds beyond the decision delay.
+Every run overwrites this file.
 
-**RPO observed**: writes the client was told were committed that are missing on
-the node that took over. **RTO observed**: first failed write to first success,
-as the client sees it. A write that failed but is present is in doubt, not lost.
+The recovery point objective (RPO) measures how much data is lost.
+**RPO observed** is the number of writes that the client was told were committed
+and that are missing on the node that took over.
+The recovery time objective (RTO) measures how long clients cannot write.
+**RTO observed** is the time from the first failed write to the first success,
+as the client sees it.
+A write that failed but is present is in doubt and is not lost.
 
 ## Verdict
 
@@ -32,7 +38,7 @@ as the client sees it. A write that failed but is present is in doubt, not lost.
 | stop | 3 | 369 / 374 / 482 | 1.4% of 26 s |
 | crash | 3 | 312 / 499 / 726 | 1.9% of 26 s |
 
-The outage includes the decision delay: subtract it to get the system time.
+The outage includes the decision delay. Subtract the delay to get the system time.
 
 ## RPO: writes acknowledged and then lost
 
@@ -44,8 +50,8 @@ The outage includes the decision delay: subtract it to get the system time.
 | sync | 3 | 3 | 35 | **0 / 0 / 0** | 0 | 3446 / 3576 / 3702 |
 | control | 3 | 3 | 51 | **17 / 17 / 17** | 0 | 317 / 317 / 330 |
 
-Under sync the outage is the time writes were blocked while the standby was cut off:
-the price of RPO 0.
+Under synchronous replication, the outage is the time that writes were blocked
+while the standby was cut off. That is the price of an RPO of 0.
 
 ## Crash matrix: a node killed and restarted, no failover
 
@@ -56,7 +62,8 @@ the price of RPO 0.
 | midtx | 3 | 3 | 0 | 32 | 3456 / 3490 / 3538 | 0 | 0 | 0 | n/a |
 | checkpoint | 3 | 3 | 0 | 40 | 3614 / 3794 / 4419 | 0 | 0 | 0 | 3 of 3 |
 
-Each figure is the worst over the trials. Index damage is from amcheck.
+Each figure is the worst result over the trials.
+The amcheck tool reports the index damage.
 
 ## Every trial
 
@@ -98,13 +105,17 @@ Each figure is the worst over the trials. Index damage is from amcheck.
 
 ## Limits
 
-- One machine and a process crash (SIGKILL), not a power cut.
-- Lag is injected by isolating the standby from the network, so the loss is the
-  writes of the lag window. Gradual latency needs a network fault tool (GAP-11).
+- The measurements ran on one machine, and the fault was a process crash
+  (SIGKILL) and not a power cut.
+- The test injects lag by isolating the standby from the network, so the loss
+  is the writes of the lag window. Gradual latency needs a network fault tool.
 - RTO is the time until a write succeeds somewhere, seen through the Docker host.
-  There is no router or client library, and promotion is a script, not a controller.
-- About 10 writes a second: loss is counted in tens of writes, not thousands.
-- The crash matrix kills the container (SIGKILL); a power cut is not tested.
-- Where a case has no target the number is recorded only.
+  There is no router or client library, and promotion is a script and not a
+  controller.
+- The write rate is about 10 writes a second, so loss is counted in tens of
+  writes and not in thousands.
+- The crash matrix kills the container with SIGKILL. A power cut is not tested.
+- Where a case has no target, the number is recorded only.
 
-Reproduce: bash scripts/measure-recovery.sh (its --help lists the settings).
+To reproduce the run, use bash scripts/measure-recovery.sh. Its --help lists the
+settings.

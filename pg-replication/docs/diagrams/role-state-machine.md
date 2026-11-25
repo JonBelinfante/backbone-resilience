@@ -33,7 +33,7 @@ stateDiagram-v2
 
 ## Pairs: the restore script's decision table
 
-[restore-starting-state.sh](../../scripts/restore-starting-state.sh) reads both nodes and acts on the pair `primary/standby`. The pair uses the container names, not the roles. The table shows what the script does.
+The script [restore-starting-state.sh](../../scripts/restore-starting-state.sh) reads both nodes and acts on the pair `primary/standby`. The pair uses the container names, not the roles. The table shows what the script does.
 
 | Primary and standby now | Action |
 |---|---|

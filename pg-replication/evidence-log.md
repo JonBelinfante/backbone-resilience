@@ -36,7 +36,7 @@ Both containers were healthy at the start, in asynchronous mode with the startin
 | Split-brain guard. | After the primary was stopped and the standby was promoted, `bring-up-database.sh --database primary` exited with status 1. It logged that both nodes were writable and that it was stopping `pg-primary`. The container was not running afterwards. `restore-starting-state.sh` then exited with status 0 and the starting roles were back. |
 | `verify-replication.sh`. | The row was visible on the standby after about 62 milliseconds. The standby rejected a write. |
 | `run-all-checks.sh`. | The lint check and the round trip both passed. |
-| Port exposure. | Before the fix, port 5433 was reachable on the LAN address. After the fix it was bound to `127.0.0.1` only, and it was closed on the LAN address. |
+| Port exposure. | Before the fix, port 5433 was reachable on the machine's network address. After the fix it was bound to `127.0.0.1` only, and it was closed on the network address. |
 
 The evidence of 2026-11-05 and 2026-11-13 was gathered in earlier work. It is described in the project history, and it was not repeated unless a row says 2026-11-14.
 

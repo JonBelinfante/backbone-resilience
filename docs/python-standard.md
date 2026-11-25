@@ -1,60 +1,61 @@
 # House Python standard
 
-The rules every Python file in this repository follows, and how they are enforced. It exists for the same reason the Bash
-standard does: so the code is checked by a program, not by taste. All services (payment service, outbox relay, consumers,
-checker, load generator, failover controller, router) are Python; infrastructure scripts and experiments stay Bash.
+This page sets out the rules that every Python file in this repository follows, and how a program enforces them. It exists for the same reason as the Bash standard. A program checks the code, and taste does not. All services are written in Python. They are the payment service, the outbox relay, the consumers, the checker, the load generator, the failover controller and the router. The infrastructure scripts and the experiments stay in Bash.
 
 ## The standard in one sentence
 
-Follow **PEP 8** (style), **PEP 257** (docstrings) and **PEP 484** (type hints), with the Google Python Style Guide as the
-tie-breaker where those are silent, and the limits below. A program checks all of it and **no rule can be waived**.
+Follow Python Enhancement Proposal (PEP) 8 for style, PEP 257 for docstrings and PEP 484 for type hints. Use the Google Python Style Guide as the tie-breaker where those are silent. Add the limits below. A program checks all of it, and **no rule can be waived**.
 
 | Document | What it gives us |
 |---|---|
-| [PEP 8](https://peps.python.org/pep-0008/) | Layout, naming, imports |
-| [PEP 257](https://peps.python.org/pep-0257/) | What a docstring says and where |
-| [PEP 484](https://peps.python.org/pep-0484/) | Type hints; the type checker enforces them |
-| [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html) | One readable guide for everything those leave open; our docstrings use its Args and Returns sections |
+| [PEP 8](https://peps.python.org/pep-0008/) | Layout, naming and imports. |
+| [PEP 257](https://peps.python.org/pep-0257/) | What a docstring says and where it goes. |
+| [PEP 484](https://peps.python.org/pep-0484/) | Type hints, which the type checker enforces. |
+| [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html) | One readable guide for everything that the PEPs leave open. Our docstrings use its Args and Returns sections. |
 
 ## What is enforced, and by what
 
-The settings are in [pyproject.toml](../pyproject.toml). The tools run in a container at fixed versions (ruff, mypy, pytest;
-see [python-standard/Dockerfile](../python-standard/Dockerfile)), so every run gives the same answer.
+The settings are in [pyproject.toml](../pyproject.toml). The tools run in a container at fixed versions, which are ruff, mypy and pytest. The [Dockerfile](../python-standard/Dockerfile) in `python-standard/` pins them, so every run gives the same answer.
 
 | Rule | Limit or effect | Tool and rule family |
 |---|---|---|
-| Line length | 100 columns | ruff, E |
-| Function size | at most 40 statements, 10 branches, complexity 10 | ruff, PLR and C90 |
-| Parameters | at most 4 per function | ruff, PLR0913 |
-| Docstrings | every public module, class and function, Google style | ruff, D |
-| Types | every function annotated; mypy in strict mode | ruff, ANN; mypy |
-| Naming | PEP 8 names | ruff, N |
-| Logging, not printing | no `print`; log calls used correctly | ruff, T20, LOG, G |
-| No hard-coded secrets, no shell injection, no `assert` for checks | security rules | ruff, S |
-| Errors | no blind `except`, no long messages inline | ruff, BLE, TRY, EM |
-| Time | no naive datetimes | ruff, DTZ |
-| Flags | no boolean positional arguments | ruff, FBT |
-| Simpler code | simplifications, no commented-out code | ruff, SIM, RET, PERF, PTH, ERA |
-| Tests | pytest; `assert` is allowed in test files only | pytest; per-file rule in the config |
+| Line length. | 100 columns. | Ruff, E. |
+| Function size. | At most 40 statements, 10 branches and a complexity of 10. | Ruff, PLR and C90. |
+| Parameters. | At most 4 for each function. | Ruff, PLR0913. |
+| Docstrings. | Every public module, class and function has one, in Google style. | Ruff, D. |
+| Types. | Every function is annotated, and mypy runs in strict mode. | Ruff, ANN, and mypy. |
+| Naming. | Names follow PEP 8. | Ruff, N. |
+| Logging, not printing. | `print` is forbidden, and log calls must be used correctly. | Ruff, T20, LOG and G. |
+| Security. | No hard-coded secrets, no shell injection, and no `assert` for checks. | Ruff, S. |
+| Errors. | No blind `except`, and no long messages written inline. | Ruff, BLE, TRY and EM. |
+| Time. | No naive datetimes. | Ruff, DTZ. |
+| Flags. | No boolean positional arguments. | Ruff, FBT. |
+| Simpler code. | Simplifications are required, and commented-out code is forbidden. | Ruff, SIM, RET, PERF, PTH and ERA. |
+| Tests. | Tests use pytest. The `assert` statement is allowed in test files only. | Pytest, with a per-file rule in the configuration. |
 
-These are the Python counterparts of the Bash standard's limits (40-line functions, 4 parameters, 100 columns, no secrets on
-command lines, no `echo` for logging).
+These rules are the Python counterparts of the Bash standard's limits. Those limits are 40-line functions, 4 parameters, 100 columns, no secrets on command lines, and no `echo` for logging.
 
 ## No waivers
 
-A comment cannot switch a rule off. `# noqa`, `# type: ignore` and similar are refused by
-[check-python.sh](../pg-replication/scripts/check-python.sh), because ruff itself would obey them: a file with
-`print("x")  # noqa: T201` passes ruff and fails the standard. If a rule is wrong for the repository, change
-[pyproject.toml](../pyproject.toml) for everyone, in the open, with a reason.
+A comment cannot switch a rule off. The comments `# noqa` and `# type: ignore`, and similar ones, are refused by [check-python.sh](../pg-replication/scripts/check-python.sh). Ruff itself would obey them. A file with `print("x")  # noqa: T201` passes ruff and fails the standard. If a rule is wrong for the repository, change [pyproject.toml](../pyproject.toml) for everyone, in the open, and give a reason.
 
 ## The checkers are checked
 
-[python-standard/fixtures](../python-standard/fixtures) holds one **good** example, with its test, that must pass every check,
-and one small **bad** file per rule that must fail. The first line of each bad file names the tool and rule that must catch it
-(`# expect: ruff PLR0913`). If a bad file is not caught, the check fails: a checker that has stopped catching something is
-worse than none. The bad files today cover too many parameters, `print`, a hard-coded secret, a blind `except`, a missing
-annotation, a missing docstring, complexity, a naive datetime, a boolean positional argument, a type error (mypy) and a
-waiver comment.
+The folder [python-standard/fixtures](../python-standard/fixtures) holds two kinds of file. One **good** example, with its test, must pass every check. One small **bad** file for each rule must fail. The first line of each bad file names the tool and the rule that must catch it, for example `# expect: ruff PLR0913`. If a bad file is not caught, the check fails. A checker that has stopped catching something is worse than no checker.
+
+The bad files cover these faults today.
+
+- Too many parameters.
+- A `print` call.
+- A hard-coded secret.
+- A blind `except`.
+- A missing annotation.
+- A missing docstring.
+- Excess complexity.
+- A naive datetime.
+- A boolean positional argument.
+- A type error, which mypy catches.
+- A waiver comment.
 
 ## Running it
 
@@ -63,25 +64,19 @@ bash pg-replication/scripts/check-python.sh        # about 5 seconds once the to
 bash pg-replication/scripts/run-all-checks.sh      # the Bash standard, the documents and Python, together
 ```
 
-The first run builds the tools image, which needs network access to the Python package index. The code to be checked is the
-good example and, once it exists, everything under `services/`. Pull the tools versions forward deliberately: change them in
-the Dockerfile, run the check, and note it in the commit.
+The first run builds the tools image, which needs network access to the Python package index. The code under check is the good example and everything under `services/`. Move the tool versions forward on purpose. Change them in the Dockerfile, run the check, and note the change in the commit.
 
 ## Rules for the Python written here
 
 - One service is one folder under `services/`, with its tests next to it.
-- A service is stateless and restartable; its state lives in the database or the log.
-- Configuration comes from the environment, read once at start-up and checked there; secrets come from files, never from
-  arguments or logs.
-- Every outward action (a database write, a payment, a message) is idempotent and carries its idempotency key.
-- Time and randomness are passed in, not read in the middle of logic, so tests are deterministic.
-- Library choices are recorded in the service's own folder with the reason.
+- A service is stateless and restartable. Its state lives in the database or the log.
+- Configuration comes from the environment. The service reads it once at start-up and checks it there. Secrets come from files and never from arguments or logs.
+- Every outward action is idempotent and carries its idempotency key. The actions are a database write, a payment and a message.
+- Time and randomness are passed in. They are not read in the middle of logic, so tests are deterministic.
+- The service's own folder records each library choice and the reason for it.
 
 ## Limits of this standard
 
-- It is a standard for style, types and a few classes of mistake. It does not prove the code correct: the experiments and
-  the independent checker do that.
-- The rules are the ones ruff and mypy implement at the pinned versions; a new version can add rules, which is why the
-  versions are pinned.
-- The Bash standard has a rule for each of its limits; this one leans on the tools' own families. Where a Bash rule has no
-  counterpart yet (for example, a limit on file length), add it to the configuration or to the check script.
+- It is a standard for style, types and a few classes of mistake. It does not prove the code correct. The experiments and the independent checker do that.
+- The rules are the ones that ruff and mypy implement at the pinned versions. A new version can add rules, which is why the versions are pinned.
+- The Bash standard has a rule for each of its limits, but this standard leans on the tools' own rule families. Where a Bash rule has no counterpart yet, add one to the configuration or to the check script. A limit on file length is an example.

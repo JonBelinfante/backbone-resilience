@@ -71,18 +71,25 @@ report_header() {
   local commit
   local version
 
-  TZ=UTC printf -v stamp '%(%Y-%m-%d %H:%M:%S UTC)T' -1
+  TZ=UTC printf -v stamp '%(%Y-%m-%d %H:%M:%S)T' -1
   commit="$(measure::commit_label "${SCRIPT_DIR}..")"
   version="$(database::bare "${PRIMARY_CONTAINER}" <<< 'show server_version')"
-  printf '# Recovery measurements: RPO and RTO\n\n'
-  printf 'Written by write-recovery-report.sh on %s, at commit %s.\n' "${stamp}" "${commit}"
-  printf 'PostgreSQL %s, two nodes in Docker Compose on one machine.\n' "${version}"
-  printf 'A write about every 100 ms. RTO target: %s s beyond the decision delay.\n' \
+  printf '# Recovery measurements: recovery point and recovery time\n\n'
+  printf 'Written by write-recovery-report.sh on %s Coordinated Universal Time (UTC),\n' "${stamp}"
+  printf 'at commit %s.\n' "${commit}"
+  printf 'The server was PostgreSQL %s, with two nodes in Docker Compose on one machine.\n' \
+    "${version}"
+  printf 'The prober wrote about every 100 milliseconds.\n'
+  printf 'The recovery time target was %s seconds beyond the decision delay.\n' \
     "${RTO_TARGET_SECONDS}"
-  printf 'This file is overwritten by every run.\n\n'
-  printf '**RPO observed**: writes the client was told were committed that are missing on\n'
-  printf 'the node that took over. **RTO observed**: first failed write to first success,\n'
-  printf 'as the client sees it. A write that failed but is present is in doubt, not lost.\n\n'
+  printf 'Every run overwrites this file.\n\n'
+  printf 'The recovery point objective (RPO) measures how much data is lost.\n'
+  printf '**RPO observed** is the number of writes that the client was told were committed\n'
+  printf 'and that are missing on the node that took over.\n'
+  printf 'The recovery time objective (RTO) measures how long clients cannot write.\n'
+  printf '**RTO observed** is the time from the first failed write to the first success,\n'
+  printf 'as the client sees it.\n'
+  printf 'A write that failed but is present is in doubt and is not lost.\n\n'
 }
 
 # Print what a case is held to, in a few words.
@@ -167,7 +174,7 @@ report_rto() {
     spread="$(measure::triple "${results}" "${line% *}" "${line#* }" longest_outage_ms)"
     measure::row "${line% *}" "${trials}" "${spread}" "${share}"
   done <<< "${cases}"
-  printf '\nThe outage includes the decision delay: subtract it to get the system time.\n\n'
+  printf '\nThe outage includes the decision delay. Subtract the delay to get the system time.\n\n'
 }
 
 # Print the RPO table: lost, in doubt and blocked time for the cases that isolate the standby.
@@ -196,8 +203,8 @@ report_rpo() {
     cells+=("$(measure::triple "${results}" "${cells[0]}" "${cells[1]}" longest_outage_ms)")
     measure::row "${cells[@]}"
   done <<< "${cases}"
-  printf '\nUnder sync the outage is the time writes were blocked while the standby was cut off:\n'
-  printf 'the price of RPO 0.\n\n'
+  printf '\nUnder synchronous replication, the outage is the time that writes were blocked\n'
+  printf 'while the standby was cut off. That is the price of an RPO of 0.\n\n'
 }
 
 # Print the crash-matrix table: what survived a crash with no failover.
@@ -236,7 +243,8 @@ report_matrix() {
     fi
     measure::row "${cells[@]}"
   done <<< "${cases}"
-  printf '\nEach figure is the worst over the trials. Index damage is from amcheck.\n\n'
+  printf '\nEach figure is the worst result over the trials.\n'
+  printf 'The amcheck tool reports the index damage.\n\n'
 }
 
 # Print every trial as a table row.
@@ -265,15 +273,19 @@ report_trials() {
 report_limits() {
   log INFO 'writing the limits'
   printf '## Limits\n\n'
-  printf -- '- One machine and a process crash (SIGKILL), not a power cut.\n'
-  printf -- '- Lag is injected by isolating the standby from the network, so the loss is the\n'
-  printf '  writes of the lag window. Gradual latency needs a network fault tool (GAP-11).\n'
+  printf -- '- The measurements ran on one machine, and the fault was a process crash\n'
+  printf '  (SIGKILL) and not a power cut.\n'
+  printf -- '- The test injects lag by isolating the standby from the network, so the loss\n'
+  printf '  is the writes of the lag window. Gradual latency needs a network fault tool.\n'
   printf -- '- RTO is the time until a write succeeds somewhere, seen through the Docker host.\n'
-  printf '  There is no router or client library, and promotion is a script, not a controller.\n'
-  printf -- '- About 10 writes a second: loss is counted in tens of writes, not thousands.\n'
-  printf -- '- The crash matrix kills the container (SIGKILL); a power cut is not tested.\n'
-  printf -- '- Where a case has no target the number is recorded only.\n\n'
-  printf 'Reproduce: bash scripts/measure-recovery.sh (its --help lists the settings).\n'
+  printf '  There is no router or client library, and promotion is a script and not a\n'
+  printf '  controller.\n'
+  printf -- '- The write rate is about 10 writes a second, so loss is counted in tens of\n'
+  printf '  writes and not in thousands.\n'
+  printf -- '- The crash matrix kills the container with SIGKILL. A power cut is not tested.\n'
+  printf -- '- Where a case has no target, the number is recorded only.\n\n'
+  printf 'To reproduce the run, use bash scripts/measure-recovery.sh. Its --help lists the\n'
+  printf 'settings.\n'
 }
 
 # Judge the results and write the whole report.

@@ -11,11 +11,10 @@ A replica applies changes after the writer does. In that gap it shows an old bal
 | Where | What it does |
 |---|---|
 | [lib/database.sh](../../lib/database.sh), `database::read_for_decision` | Runs a query for a decision, and refuses a node that is in recovery. |
-| [lib/database.sh](../../lib/database.sh), `database::wait_for_replay` | Serves the case where a replica must be read. It waits until the replica has replayed a given WAL position, so that the replica shows every change up to that point. |
+| [lib/database.sh](../../lib/database.sh), `database::wait_for_replay` | Serves the case where a replica must be read. It waits until the replica has replayed a given position in the write-ahead log (WAL), so that the replica shows every change up to that point. |
 | [lib/fault.sh](../../lib/fault.sh), `fault::set_apply_delay` | Makes a standby apply changes late, through PostgreSQL's recovery minimum apply delay setting. The lag is then deterministic, and the anomaly can be shown on demand. |
 | [test-replica-lag.sh](../../scripts/test-replica-lag.sh) | Runs the experiment: the wrong way, the right way, the guard and the wait. |
 
-In this page, WAL means the write-ahead log, which is the stream of changes that PostgreSQL replicates.
 
 ## Guards against
 

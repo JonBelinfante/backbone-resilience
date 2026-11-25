@@ -88,7 +88,7 @@ Phase 1 is complete. Every Phase 1 capability has an automated test, and each te
 
 - **Problem:** The writer is gone. The standby must become the writer, and the old node must later return as a standby.
 - **Mechanism:** `promote-standby-to-primary.sh` promotes the standby. `promote-primary-to-standby.sh` rebuilds the old primary behind the new writer with `pg_rewind`, a slot and standby settings.
-- **Test:** `test-failover-roundtrip.sh` runs 17 steps of failover and fail-back. It narrates every SQL statement and its result.
+- **Test:** `test-failover-roundtrip.sh` runs 17 steps of failover and fail-back. It narrates every Structured Query Language (SQL) statement and its result.
 - **Result:** The roles swap and swap back. Both nodes end with identical data.
 - **Register:** FOV-01, FOV-04 and FOV-06. The [failover sequence diagram](../pg-replication/docs/diagrams/failover-sequence.md) shows the steps.
 
@@ -270,7 +270,7 @@ The recovery point objective (RPO) is the number of acknowledged writes that are
 - **Result for a bandwidth limit:** At 512 KB per second, one 8 MB write left the standby 4 to 5 MB behind. A synchronous commit issued then waited 14.2 seconds behind the backlog.
 - **Result for one-way silence:** The timeouts were 5 seconds. When the standby's replies were lost, the standby still had the data, but the writer dropped it after 4.0 seconds. When the writer's WAL was lost, the standby did not have the data, and the connection dropped after 4.7 seconds.
 - **Result for a dropping link:** When the link dropped every connection after 256 KB, replication stalled completely. Each reconnect restarts at the start of the current WAL segment, and the standby's log shows the same start position every time.
-- **Limit:** TCP (the Transmission Control Protocol) hides packet loss, so loss itself is not shown. Drops and silence are its effects. The byte budget at which replication finishes is not mapped.
+- **Limit:** The Transmission Control Protocol (TCP) hides packet loss, so loss itself is not shown. Drops and silence are its effects. The byte budget at which replication finishes is not mapped.
 - **Register:** NET-04 to NET-07.
 
 ### 6.5 A dead standby cannot fill the primary's disk

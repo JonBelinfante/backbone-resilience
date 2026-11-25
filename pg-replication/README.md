@@ -70,7 +70,7 @@ A script runs as a command. A library is sourced by a script and runs in the cal
 | `act-on-failover.sh` | Waits for the controller's `fail-over` decision, using `--controller NAME` and `EPOCH_FILE`. It then raises the epoch, kills the old writer and promotes the standby. A re-run is safe. |
 | `collect-logs.sh` | Saves container logs into `logs/`. Run it **before** `docker compose down`, because removing containers deletes their logs. |
 | `show-container-info.sh --database primary\|standby` or `--container NAME` | A command-line wrapper over `lib/container.sh`. It prints the container name for a database, or `true` or `false` for whether a container is running. |
-| `run-database-sql.sh --container NAME [--bare] [--ask recovery]` | A command-line wrapper over `lib/database.sh`. It runs the SQL on standard input with `psql` in that container. With `--ask recovery` it prints `t` for a standby and `f` for a node that accepts writes. |
+| `run-database-sql.sh --container NAME [--bare] [--ask recovery]` | A command-line wrapper over `lib/database.sh`. It runs the Structured Query Language (SQL) text on standard input with `psql` in that container. With `--ask recovery` it prints `t` for a standby and `f` for a node that accepts writes. |
 
 ### Libraries
 
@@ -91,11 +91,11 @@ A script runs as a command. A library is sourced by a script and runs in the cal
 
 ### Tests of replication, failover and recovery
 
-Every test restores the starting state when it ends, whether it passes, fails or is interrupted. Every test changes the databases, so run it only on the throwaway stack.
+In this section, SIGKILL is the signal that stops a process at once. Every test restores the starting state when it ends, whether it passes, fails or is interrupted. Every test changes the databases, so run it only on the throwaway stack.
 
 | Script | What it does |
 |---|---|
-| `test-failover-roundtrip.sh` | A 17-step test that tells its story. Every line has a UTC time and the script name, with each SQL statement, the data it returned and each script's output. It drops tables, replicates a row, fails over, writes on the promoted standby, rejoins the old primary, writes while the replica is down, and compares both databases. |
+| `test-failover-roundtrip.sh` | A 17-step test that tells its story. Every line has a time in Coordinated Universal Time (UTC) and the script name, with each SQL statement, the data it returned and each script's output. It drops tables, replicates a row, fails over, writes on the promoted standby, rejoins the old primary, writes while the replica is down, and compares both databases. |
 | `test-replication-modes.sh` | A 4-step test. It switches the mode with no restart. It then tests asynchronous mode with the standby stopped, synchronous mode with the standby stopped, and synchronous mode with the standby killed mid-commit. |
 | `test-clone-rebuild.sh` | A 4-step test. Synchronous replication is on, and the writer names a synchronous standby. After a failover, the old node is rebuilt by cloning the writer. The rebuilt node streams, names no synchronous standby and holds identical rows. |
 | `test-guards.sh` | A 3-step test. The promotion guard refuses while the primary answers. With the fence lifted, the split-brain guard stops a restarted old primary. A start with one writer and one replica is allowed. |
@@ -133,7 +133,7 @@ Every test restores the starting state when it ends, whether it passes, fails or
 | `test-link-faults.sh` | A 6-step test of the replication link under jitter, a bandwidth limit, silence in one direction and a link that drops every connection after a byte budget. It takes about 5 minutes. Packet loss itself cannot be shown through Toxiproxy. |
 | `test-rotation.sh` | A 7-step test. It rotates the replication secret, the superuser secret and the replication secret again under a write probe. It requires no failed write, a standby that streams as the role in the secret file, one replication role left, and a standby rebuilt from an empty volume that joins with the new secrets. `ROTATION_MODE=sync` runs it under synchronous replication. |
 | `test-maintenance-lock.sh` | A 5-step test of the maintenance lock. Two rotations together must give a refusal for the second. A rotation during a rebuild is refused, and the rebuild completes. A stale lock is taken over, and a reused process identifier is not honoured. |
-| `measure-recovery.sh [--scenarios LIST] [--results FILE]` | Measures the RPO, the RTO and crash recovery. It runs failure trials under a write prober, saves one result line for each trial in `docs/recovery-results.txt`, and writes the report. It exits with status 1 if a trial fails or a target is missed. A trial takes about 30 seconds. |
+| `measure-recovery.sh [--scenarios LIST] [--results FILE]` | Measures the RPO, the recovery time objective (RTO) and crash recovery. It runs failure trials under a write prober, saves one result line for each trial in `docs/recovery-results.txt`, and writes the report. It exits with status 1 if a trial fails or a target is missed. A trial takes about 30 seconds. |
 | `write-recovery-report.sh [--results FILE] [--report FILE]` | Judges saved trial results against the targets and writes [docs/recovery-report.md](docs/recovery-report.md). It can regenerate the report from saved results without running the trials again. |
 | `run-recovery-trial.sh --scenario NAME [--lag S]` | Runs one trial. It restores the stack, starts the prober, causes the failure, promotes, reports, and restores again. It prints one `RESULT` line. |
 | `run-write-prober.sh --ledger FILE --stop-file FILE` | Writes numbered rows about every 100 milliseconds. It logs each attempt, with its start, end, node and outcome, to a ledger outside both databases. It follows a failover by trying the node that last accepted a write and then the other. |
@@ -203,6 +203,6 @@ These limits are deliberate and belong to later phases.
 - **The epoch is a file on the host.** A guard stops a fenced writer, and the guard must look in time. The lease check (LEASE-04) refuses a write from a process that was paused while its lease ran out. That check is opt-in for each table, it uses the node's own clock, and it compares lease time and not epochs (GAP-03).
 - **A failover from synchronous replication leaves the new writer asynchronous** until the old node has rejoined. The rejoin then switches synchronous replication on again (SYNC-01). The window lasts about as long as the rejoin takes, and every write has one copy only.
 - **There is no client service yet.** The tests write through `psql` and `pgbench`. There is no router, no reconnecting client with idempotency keys, and no outbox, event stream or idempotent consumer. These belong to Phase 2 (GAP-12) and Phase 3.
-- **Real packet loss and reordering are not tested.** TCP, the Transmission Control Protocol, hides them from Toxiproxy (GAP-11). Jitter, a bandwidth limit, one-way silence and a dropping link are tested (NET-04 to NET-07).
+- **Real packet loss and reordering are not tested.** The Transmission Control Protocol (TCP) hides them from Toxiproxy (GAP-11). Jitter, a bandwidth limit, one-way silence and a dropping link are tested (NET-04 to NET-07).
 - **Point-in-time recovery covers one timeline** (BAK-01). The archive is on the primary only, the target is an LSN, and everything is on one host. There is no failover between backup and recovery, no off-site copy and no retention policy. Recovery by time is not built.
 - **Only one standby is tested.** Every synchronous result is for one standby (P1-08, a stretch item).
