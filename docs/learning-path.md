@@ -84,4 +84,4 @@ This path takes you through seven labs. Each lab runs one test and teaches one i
 
 - The [failure modes](failure-modes.md) index lists every fault that a test exercises, and the faults that none does.
 - The [capability catalogue](capability-catalogue.md) gives one entry for each capability.
-- To write your own experiment, follow the guide on adding an experiment when it is available. Until then, copy the shape of `test-divergence-rewind.sh`.
+- To write your own experiment, follow the guide on [adding an experiment](adding-an-experiment.md).
