@@ -185,6 +185,7 @@ restore_starting_state() {
       ;;
     writer/stopped)
       start_or_rebuild_standby
+      rebuild_standby_unless_streaming
       ;;
     stopped/replica)
       bash "${SCRIPT_DIR}bring-up-database.sh" --database primary
@@ -203,6 +204,17 @@ restore_starting_state() {
   esac
 }
 
+# Wait until the standby has replayed everything the writer has written so far. Streaming alone
+# can still mean a backlog (a node just cloned replays for a while), and a test that starts from
+# this state must not find the standby behind.
+wait_until_caught_up() {
+  log INFO "waiting for ${STANDBY_CONTAINER} to replay what ${PRIMARY_CONTAINER} has written"
+  local position
+
+  position="$(database::bare "${PRIMARY_CONTAINER}" <<< 'select pg_current_wal_lsn()')"
+  database::wait_for_replay "${STANDBY_CONTAINER}" "${position}"
+}
+
 # Fail unless the primary is the writer and the standby is a replica.
 check_starting_state() {
   local primary_role
@@ -214,6 +226,7 @@ check_starting_state() {
     die 1 "restore failed: roles are ${primary_role}/${standby_role} (primary/standby)"
   fi
   wait_for_streaming || die 1 "restore failed: ${STANDBY_CONTAINER} is not streaming"
+  wait_until_caught_up
   log INFO 'starting state confirmed'
   printf '%s accepts writes and %s is streaming from it\n' \
     "${PRIMARY_CONTAINER}" \

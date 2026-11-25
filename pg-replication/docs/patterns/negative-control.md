@@ -15,12 +15,13 @@ Each protected behaviour has a switch or a variant that removes only that protec
 |---|---|---|
 | Synchronous commit (RPO-02) | commit level `local` | 17 writes lost where sync lost 0 |
 | The lease guard (LEASE-01, LEASE-02) | no guard | the old writer kept writing; 14 to 16 s of two writers |
+| The write check (LEASE-04) | no trigger | a paused writer accepted a write 3.1 s after its lease ran out |
 | The fence (FOV-10) | fence lifted | the old primary started writable and accepted a write |
 | The actor lock (ACT-03) | `ACTOR_LOCK=off` | both actors ran, and a real race on the epoch file appeared |
 | The witness window (DET-01) | a short window with an idle writer | a false failover |
 | Decisions read the writer (DEC-01) | read the replica | both debits approved, balance -100 |
 
-The tests are in [scripts/](../../scripts/): `test-replica-lag.sh`, `test-fencing.sh`, `test-detector.sh`, `test-lease-fence.sh`, `test-lease-failover.sh` and `test-two-actors.sh`; the RPO controls are in `measure-recovery.sh`.
+The tests are in [scripts/](../../scripts/): `test-replica-lag.sh`, `test-fencing.sh`, `test-detector.sh`, `test-lease-fence.sh`, `test-lease-failover.sh`, `test-resume-fence.sh` and `test-two-actors.sh`; the RPO controls are in `measure-recovery.sh`.
 
 ## Guards against
 

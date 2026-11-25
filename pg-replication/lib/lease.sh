@@ -1,12 +1,24 @@
 # script-kind: library
 # Purpose: The writer's lease and the guard that enforces it: install, guard, read, remove.
-# Usage: source "${SCRIPT_DIR}../lib/lease.sh", then call lease::install, guard_start, guard_stop
+# Usage: source "${SCRIPT_DIR}../lib/lease.sh", then call lease::install, guard_start, check
 # Requires: docker
 # Depends: database
 # Exit codes: none (the functions return, or call die of the script that imported them)
 
 readonly LEASE_GUARD_IMAGE='resilience-fence-guard'
 readonly LEASE_GUARD_PREFIX='guard-'
+readonly LEASE_TABLE_PATTERN='^[a-z][a-z0-9_]*$'
+readonly LEASE_CHECK_FUNCTION_SQL="create or replace function fence_check() returns trigger
+  language plpgsql as \$body\$
+begin
+  if to_regclass('fence_lease') is not null and exists (
+    select 1 from fence_lease where id = 1 and expires_at < clock_timestamp()) then
+    raise exception 'fenced: the writer lease has expired' using errcode = '55000';
+  end if;
+  return null;
+end \$body\$"
+readonly LEASE_DROP_SQL='drop table if exists fence_lease;
+  drop function if exists fence_check() cascade'
 readonly LEASE_TABLE_SQL='create table if not exists fence_lease (
   id int primary key check (id = 1), epoch bigint not null, expires_at timestamptz not null)'
 
@@ -39,13 +51,13 @@ lease::install() {
   database::run "${container}" <<< "${sql}" > /dev/null
 }
 
-# Drop the lease table from a writer (safe to repeat).
+# Drop the lease table, and the write check that reads it, from a writer (safe to repeat).
 # Usage: lease::remove CONTAINER
 lease::remove() {
   local container="${1:?container required}"
 
   log INFO "CHANGE: ${container} loses its lease table"
-  database::run "${container}" <<< 'drop table if exists fence_lease' > /dev/null
+  database::run "${container}" <<< "${LEASE_DROP_SQL}" > /dev/null
 }
 
 # Print the seconds the writer's lease has left (negative once it ran out).
@@ -110,4 +122,31 @@ lease::guard_log() {
   local container="${1:?container required}"
 
   docker logs "${LEASE_GUARD_PREFIX}${container}" 2>&1
+}
+
+# Make a table refuse every write once the writer's lease has run out. The check runs inside the
+# write, at the moment it happens, so it does not depend on a guard looking in time. A node with
+# no lease table, or no lease row, is not refused.
+# Usage: lease::install_write_check CONTAINER TABLE
+lease::install_write_check() {
+  local container="${1:?container required}"
+  local table="${2:?table required}"
+  local sql="${LEASE_CHECK_FUNCTION_SQL}; drop trigger if exists fence_write on ${table};"
+
+  [[ "${table}" =~ ${LEASE_TABLE_PATTERN} ]] || die 2 "not a valid table name: ${table}"
+  sql+=" create trigger fence_write before insert or update or delete or truncate on ${table}"
+  sql+=' for each statement execute function fence_check()'
+  log INFO "CHANGE: ${container} refuses writes to ${table} once its lease has run out"
+  database::run "${container}" <<< "${sql}" > /dev/null
+}
+
+# Take the write check off a table (safe to repeat).
+# Usage: lease::remove_write_check CONTAINER TABLE
+lease::remove_write_check() {
+  local container="${1:?container required}"
+  local table="${2:?table required}"
+
+  [[ "${table}" =~ ${LEASE_TABLE_PATTERN} ]] || die 2 "not a valid table name: ${table}"
+  log INFO "CHANGE: ${container} stops checking the lease on ${table}"
+  database::run "${container}" <<< "drop trigger if exists fence_write on ${table}" > /dev/null
 }

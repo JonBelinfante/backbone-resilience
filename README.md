@@ -32,9 +32,9 @@ anyone who wants a worked example of turning an availability claim into a test.
 | You get | Where |
 |---|---|
 | A **capability catalogue**: each resilience problem, its mechanism, the test, the measured result and the limit | [docs/capability-catalogue.md](docs/capability-catalogue.md) |
-| A **capability register**: 52 capabilities, each with status, evidence and limits, plus the open gaps | [pg-replication/capability-register.md](pg-replication/capability-register.md) |
+| A **capability register**: 59 capabilities, each with status, evidence and limits, plus the open gaps | [pg-replication/capability-register.md](pg-replication/capability-register.md) |
 | An **evidence log**: the commands, numbers and defects found in each run of experiments | [pg-replication/evidence-log.md](pg-replication/evidence-log.md) |
-| **Runnable tests and experiments** (20 test scripts and a measurement runner), each restoring the starting state | [pg-replication/](pg-replication/README.md) |
+| **Runnable tests and experiments** (23 test scripts and a measurement runner), each restoring the starting state | [pg-replication/](pg-replication/README.md) |
 | **RPO and RTO measurements** with a report | [pg-replication/docs/recovery-report.md](pg-replication/docs/recovery-report.md) |
 | **Robustness patterns** (guards, verify-after-act, decisions read the writer) and diagrams | [pg-replication/docs/patterns/](pg-replication/docs/patterns/README.md) |
 | A **secret rotation guide** with no failed writes | [pg-replication/docs/secrets-rotation.md](pg-replication/docs/secrets-rotation.md) |
@@ -55,6 +55,9 @@ All on one laptop (Docker Compose, PostgreSQL 16, two nodes). They show behaviou
 | Time to notice a silent network link | 60 s by default, 4 s with tuned timeouts | NET-03 |
 | Two writers with a partitioned, unkillable old writer | 14 to 16 s without the lease guard; **none** with it | LEASE-02 |
 | Window of reduced safety after failing over from sync (closed by the rejoin) | 8.0 s | SYNC-01 |
+| A paused writer resuming after its lease ran out | accepted a write 3.1 s late without a write check; refused with it | LEASE-04 |
+| Synchronous commit time under jitter (100 ms plus or minus 100) | median 80 ms rises to about 370 ms, with a wide spread | NET-04 |
+| A link that drops every connection after 256 KB | replication stalls completely: each reconnect restarts at the segment start | NET-07 |
 | Failed writes while rotating database passwords | 0 | SEC-R3 |
 | Acknowledged writes lost across crash, mid-transaction kill and checkpoint kill | 0 | CRS-01 |
 

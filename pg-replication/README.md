@@ -7,7 +7,7 @@ New here? Start with the [repository README](../README.md) and the [capability c
 | Phase | Scope | State |
 |---|---|---|
 | 1 | The Postgres pair: replication (sync/async), manual failover and fail-back, RPO/RTO, crash and network faults, secret rotation | Complete |
-| 2 | Failover safety (detector, epoch, actor, leases and guards) and the application layer (GAP-12: outbox, idempotent consumers, checker) | Failover safety built, proven and documented as patterns; remainder GAP-03, GAP-07, GAP-11; application layer not started |
+| 2 | Failover safety (detector, epoch, actor, leases and guards) and the application layer (GAP-12: outbox, idempotent consumers, checker) | Failover safety built, proven and documented as patterns; remainder GAP-03 (the write check on every table), GAP-07 (a replicated controller), GAP-11 (packet loss); application layer not started |
 | 3 | Service layer: load generator, reconnecting clients (GAP-10), RTO under load (GAP-15), rotation for application clients (SEC-06) | Not started |
 | 4 to 6 | Hot-hot with partitioned ownership; multi-writer for commutative entries; chaos catalogue with SLI/error-budget reporting | Not started |
 
@@ -29,7 +29,7 @@ client -> pg-primary --WAL stream--> pg-standby (read-only)
   in `/bin/bash`, so install a newer one with `brew install bash` and make sure it comes first on your `PATH`
   (`bash --version` should show 5.0+).
 - Every script accepts `-h` / `--help` (usage, options, environment, exit codes), even when a tool it needs is missing: the tool check runs after the options are read.
-- Check scripts against the Bash standard (version 7) with `bash scripts/lint-scripts.sh`. It needs `shellcheck`, and
+- Check scripts against the Bash standard (version 8) with `bash scripts/lint-scripts.sh`. It needs `shellcheck`, and
   the bash-standard plugin. `BASHCHECK_WRAPPER` is required and must be the plugin's `bin` directory (it holds
   `check.py`, which verifies the checker's SHA-256 before running it). Set it once, for example in `~/.zshrc`:
   `export BASHCHECK_WRAPPER="$HOME/.claude/local-marketplaces/bashcheck/bash-standard/bin"`.
@@ -75,6 +75,7 @@ superuser password would otherwise be open to the whole network.
 | `../lib/container.sh`, `../lib/database.sh` (libraries) | **Every docker and database call, reusable from any script.** `container::` has `name_of`, `is_running`, `inspect`, `image`, `network`, `volume`, `setting`, `health`, `start`, `stop`, `wait_healthy`, `compose_up`, `logs`, `rewind` (pg_rewind in a throwaway container) and `mark_standby`. `database::` has `run`, `bare`, `in_recovery`, `is_ready` and `drop_all_sql`. Imported with `source "${SCRIPT_DIR}../lib/NAME.sh"` (plus a `# shellcheck source=` hint); they run in the caller's process, so there is no extra process or run log per call. They assume the importing script has `log` and `die` (from `runtime.sh`) |
 | `../lib/access.sh`, `../lib/fault.sh`, `../lib/toxic.sh` (libraries) | Controlled faults and access: `access::` sets passwords and probes logins; `fault::` crashes, freezes, isolates a node, delays apply and generates WAL; `toxic::` adds network delay, silence or a cut link through Toxiproxy |
 | `../lib/mode.sh` (library) | `mode::record` and `mode::wanted`: remember the replication mode that was asked for, so a rejoin can switch sync on again |
+| `../lib/link.sh` (library) | `link::route` points the standby through the proxy, `link::commit_summary` and `link::staleness` time what a link fault does, `link::restart_places` reads the standby's log for where each reconnect began; shared by the two link-fault tests |
 | `../lib/epoch.sh`, `../lib/lease.sh`, `../lib/controller.sh`, `../lib/actor.sh` (libraries) | The failover control plane: `epoch::` the failover number that only goes up; `lease::` the writer's lease and its guard; `controller::` runs the detect-only controller in a container; `actor::` runs controller and actor for a test and times the client's view |
 | `../lib/measure.sh`, `../lib/judge.sh`, `../lib/pytools.sh` (libraries) | `measure::` statistics for trial results; `judge::` PASS/FAIL against targets; `pytools::` the pinned Python checkers |
 | `../services/failover_controller`, `../services/fence_guard` (Python, run in containers) | The detect-only failover controller (also renews the lease) and the guard that stops a writer whose lease has expired; each has its own tests, run by `check-python.sh` |
@@ -107,6 +108,9 @@ superuser password would otherwise be open to the whole network.
 | `test-lease-handover.sh` | 3-step test: after a failover of an isolated writer the actor gives the new writer a lease at the new epoch and repoints the controller; the lease stays renewed, and when renewals stop the new writer is stopped by its guard |
 | `test-actor-timed-kill.sh` | SIGKILL the actor's whole process group at set delays (0.1 to 0.9 s after it starts, so the kill can land inside the promote script), then run it again; one epoch and a writable standby each time. `--delays LIST`. Crashes the writer: throwaway stack only |
 | `test-controller-kill.sh` | 2-step test: a controller killed and restarted within the lease time costs nothing; one left dead stops the writer when the lease runs out |
+| `test-lease-failback.sh` | 3-step test: a failover of an isolated writer with the lease handed on, the old node rebuilt as a standby, then the fail-back with the roles swapped: epoch 2, the first node leased again at epoch 2, the isolated writer stopped |
+| `test-resume-fence.sh` | 3-step test: a writer paused past its lease with a client write waiting. With no check it accepts the write 3.1 s late; with the write check (`lease::install_write_check`) it is refused as "fenced"; a valid lease and a missing lease are not in the way |
+| `test-link-faults.sh` | 6-step test of the replication link under jitter, a bandwidth limit, silence in one direction only, and a link that drops every connection after a byte budget (about 5 minutes). Packet loss itself cannot be shown through Toxiproxy |
 | `test-sync-after-failover.sh` | 3-step measurement: from synchronous replication, crash and promote; the new writer is asynchronous with no standby yet acknowledges a write; the old node rejoins and the rejoin switches sync on again, which closes the window (8.0 s). Crashes the writer: throwaway stack only |
 | `measure-recovery.sh [--scenarios LIST] [--results FILE]` | Measures **RPO and RTO and crash recovery**: runs failure trials (stop, crash, async, sync, control, and with `--scenarios crash-matrix` standby-crash, primary-restart, midtx, checkpoint) under a write prober, saves one result line per trial in `docs/recovery-results.txt`, then writes the report. Exits 1 if a trial fails or a target is missed. Takes about 30 s a trial (`MEASURE_TRIALS`, `MEASURE_LAGS`, `MEASURE_SYNC_LAG`, `DECISION_DELAY`, `RTO_TARGET_SECONDS`). Changes the databases: throwaway stack only |
 | `write-recovery-report.sh [--results FILE] [--report FILE]` | Judges saved trial results against the targets and writes [docs/recovery-report.md](docs/recovery-report.md): verdict per case, RTO and RPO tables, every trial, limits. Can regenerate the report from saved results without re-running the trials |
@@ -179,10 +183,12 @@ kill. Open: the epoch check in every write, loss/jitter/bandwidth faults, and th
 - **One controller and one actor**, on one host (a maintenance lock stops two actors there). Replicating them needs a consensus
   store, which is out of scope. The controller is on the write path through the lease, so an outage longer than the lease time
   stops the writer (a choice, CTL-01).
-- **The epoch is a file on the host**, and a fenced writer is stopped by a guard that must look in time. A process paused while its
-  lease ran out can write once when it resumes; only an epoch check in every write closes that (GAP-03).
+- **The epoch is a file on the host.** A fenced writer is stopped by a guard that must look in time; a process paused while its lease
+  ran out is refused at the write by the lease check (LEASE-04), but that check is opt-in per table, uses the node's own clock and
+  compares lease time, not epochs (GAP-03).
 - **After a failover from synchronous replication the new writer is asynchronous** until the old node has rejoined (the rejoin
   then switches sync on again, SYNC-01): a window of about the rejoin time with one copy of every write.
 - **No client service yet.** The tests write through `psql` and `pgbench`; there is no router, no reconnecting client with
   idempotency keys, and no outbox, event stream or idempotent consumers (GAP-12 in Phase 2; the client service in Phase 3).
-- Packet loss, jitter, bandwidth limits and one-way faults on the replication link are not tested (GAP-11).
+- Real packet loss and reordering on the replication link are not tested: TCP hides them from Toxiproxy (GAP-11). Jitter, a bandwidth
+  limit, one-way silence and a dropping link are (NET-04 to NET-07).

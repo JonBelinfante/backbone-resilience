@@ -17,6 +17,8 @@ readonly ACCESS_HBA_FILTER="grep -vxF \"\$1\" \"\$2/pg_hba.conf\" > \"\$2/pg_hba
 readonly ACCESS_HBA_DROP="${ACCESS_HBA_FILTER} && mv \"\$2/pg_hba.new\" \"\$2/pg_hba.conf\""
 readonly ACCESS_PROBE_START='IFS= read -r PGPASSWORD; export PGPASSWORD; exec psql'
 readonly ACCESS_PROBE_REPLICATION="\"host=\$1 user=\$2 replication=true dbname=postgres\""
+readonly ACCESS_NETWORK_LOGIN="\"host=\$1 user=postgres dbname=appdb connect_timeout=30\""
+readonly ACCESS_NETWORK_PSQL="exec psql ${ACCESS_NETWORK_LOGIN} -Atq -v ON_ERROR_STOP=1"
 readonly ACCESS_PROBE_LOGIN="\"host=\$1 user=\$2 dbname=appdb connect_timeout=5\""
 
 # Run SQL on the container with a secret that psql reads with \getenv NAME NEWPW. The SQL comes
@@ -151,4 +153,25 @@ access::point_standby_at() {
     "ALTER SYSTEM SET primary_conninfo = :'ci';" \
     'SELECT pg_reload_conf();' |
     access::run_sql "${standby}" "${password_file}" > /dev/null
+}
+
+# Run SQL (from standard input) as the superuser over the network, from one container to a host,
+# with the password read from a file and passed on standard input. A statement sent while the
+# target is frozen waits in the connection until it thaws. psql's own exit status is returned.
+# Usage: access::network_sql SOURCE TARGET_HOST ACCESS_FILE
+access::network_sql() {
+  local source="${1:?source container required}"
+  local target="${2:?target host required}"
+  local file="${3:?secret file required}"
+  local program="IFS= read -r PGPASSWORD; export PGPASSWORD; ${ACCESS_NETWORK_PSQL}"
+  local sql
+
+  [[ "${source}" =~ ${ACCESS_NAME_PATTERN} ]] || die 2 "not a valid container name: ${source}"
+  [[ -r "${file}" ]] || die 2 "cannot read the secret file ${file}"
+  sql="$(cat)"
+  {
+    cat -- "${file}"
+    printf '\n%s\n' "${sql}"
+  } |
+    docker exec -i "${source}" sh -c "${program}" sh "${target}"
 }

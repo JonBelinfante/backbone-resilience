@@ -15,27 +15,21 @@ fi
 shopt -s inherit_errexit
 
 # Environment: PRIMARY_CONTAINER and STANDBY_CONTAINER name the two containers as compose
-# created them; STANDBY_NAME is the standby's application_name.
+# created them.
 readonly PRIMARY_CONTAINER="${PRIMARY_CONTAINER:-pg-primary}"
 readonly STANDBY_CONTAINER="${STANDBY_CONTAINER:-pg-standby}"
-readonly STANDBY_NAME="${STANDBY_NAME:-standby1}"
 
 readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
 # started by its bare name), so paths to sibling files work however the script is started.
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
-readonly USER_FILE_PATH="${SCRIPT_DIR}../secrets/pg-replication-user.txt"
-readonly KEY_FILE_PATH="${SCRIPT_DIR}../secrets/pg-replication-password.txt"
 readonly PROXY='to-primary'
-readonly PROXY_HOST='toxiproxy'
 readonly TOTAL_STEPS=7
 readonly SQL_INSERT='insert into net_probe default values returning id'
 readonly SQL_COUNT='select count(*) from net_probe'
 readonly SQL_DROP='drop table if exists net_probe'
 readonly SQL_CREATE='create table net_probe (id bigserial primary key)'
 readonly CUT_SECONDS=5
-readonly SAMPLES=9
-readonly PAUSE_SECONDS=0.1
 
 # shellcheck source=./runtime.sh
 source "${SCRIPT_DIR}runtime.sh"
@@ -53,6 +47,8 @@ source "${SCRIPT_DIR}../lib/access.sh"
 source "${SCRIPT_DIR}../lib/toxic.sh"
 # shellcheck source=../lib/measure.sh
 source "${SCRIPT_DIR}../lib/measure.sh"
+# shellcheck source=../lib/link.sh
+source "${SCRIPT_DIR}../lib/link.sh"
 
 # Print how to run this script.
 usage() {
@@ -73,7 +69,7 @@ Put Toxiproxy between the standby and the writer and test the replication link:
 Each limit is the mechanism's, not fitted to a run. About 6 minutes; changes the databases and
 replication settings and restores them: throwaway stack only.
 
-Environment: PRIMARY_CONTAINER, STANDBY_CONTAINER, STANDBY_NAME, RUN_LOG_DIR.
+Environment: PRIMARY_CONTAINER, STANDBY_CONTAINER, RUN_LOG_DIR.
 
 Exit codes: 0 every step passed, 1 a step failed, 2 usage or configuration error
 USAGE
@@ -91,59 +87,19 @@ begin_step() {
 # Point the standby at the writer directly or through the proxy, and wait until it streams.
 # Usage: route_standby proxy|direct
 route_standby() {
-  log INFO 'routing the standby'
   local route="${1:?route required}"
-  local address="host=${PRIMARY_CONTAINER} port=5432 application_name=${STANDBY_NAME}"
 
-  if [[ "${route}" == 'proxy' ]]; then
-    address="host=${PROXY_HOST} port=15432 application_name=${STANDBY_NAME}"
-  fi
-  access::point_standby_at "${STANDBY_CONTAINER}" "${address}" "$(< "${USER_FILE_PATH}")" \
-    "${KEY_FILE_PATH}"
-  sleep 2
-  database::wait_for_streaming "${PRIMARY_CONTAINER}"
+  link::route "${SCRIPT_DIR}" "${route}" "${PRIMARY_CONTAINER}" "${STANDBY_CONTAINER}"
 }
 
-# Print how many milliseconds one commit on the writer takes.
-time_commit() {
-  local started="${EPOCHREALTIME//[.,]/}"
-
-  database::bare "${PRIMARY_CONTAINER}" <<< "${SQL_INSERT}" > /dev/null
-  printf '%d\n' "$(( (${EPOCHREALTIME//[.,]/} - started) / 1000 ))"
-}
-
-# Print the median commit time, in milliseconds, of a number of commits.
+# Print the median commit time, in milliseconds.
 median_commit() {
-  log INFO 'timing commits'
-  local count=0
-  local summary
-  local -a times=()
-  local -a parts=()
-
-  while (( count < SAMPLES )); do
-    times+=("$(time_commit)")
-    count=$(( count + 1 ))
-    sleep "${PAUSE_SECONDS}"
-  done
-  summary="$(printf '%s\n' "${times[@]}" | measure::min_median_max)"
-  read -r -a parts <<< "${summary}"
-  printf '%d\n' "${parts[1]}"
+  link::median_commit "${PRIMARY_CONTAINER}"
 }
 
 # Print how many milliseconds a row takes to become visible on the standby after it commits.
 staleness() {
-  log INFO 'timing how stale the standby is'
-  local row
-  local started
-  local sql
-
-  row="$(database::bare "${PRIMARY_CONTAINER}" <<< "${SQL_INSERT}")"
-  sql="select count(*) from net_probe where id = ${row}"
-  started="${EPOCHREALTIME//[.,]/}"
-  while [[ "$(database::bare "${STANDBY_CONTAINER}" <<< "${sql}")" != '1' ]]; do
-    sleep 0.02
-  done
-  printf '%d\n' "$(( (${EPOCHREALTIME//[.,]/} - started) / 1000 ))"
+  link::staleness "${PRIMARY_CONTAINER}" "${STANDBY_CONTAINER}"
 }
 
 # Step 1: restore, make the probe table, and route the standby through the proxy.

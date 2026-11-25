@@ -224,3 +224,19 @@ Sync window (`test-sync-after-failover.sh`, 2026-11-23): one run, passed at once
 
 Change: `lib/mode.sh` records the wanted mode (`set-replication-mode.sh` writes it, `restore-starting-state.sh` sets async); `promote-primary-to-standby.sh` reads it after the node streams and, for sync, runs `set-replication-mode.sh --mode sync` for the new writer.
 
+## Evidence log, 2026-11-25 (GAP-03 and GAP-11)
+
+| Run | Result |
+|---|---|
+| `test-link-faults.sh` | 3 full runs, all 6 steps passed (the first two runs stopped at thresholds that were wrong and were corrected, see below). Jitter, a bandwidth limit, one-way silence, a dropping link (NET-04 to NET-07) |
+| `test-network-faults.sh` | re-run after its shared helpers moved to `lib/link.sh`: passed |
+| `test-resume-fence.sh` | 2 full runs (3103 ms and 3121 ms late): control accepted a write 3.1 s after the lease ran out; with the check it was refused (LEASE-04) |
+| `test-lease-failback.sh` | 2 full runs passed; the first run's cleanup restore had failed unnoticed (see below) (LEASE-05) |
+| `run-all-checks.sh` | passed after each fix |
+
+**Corrections made while writing the link-fault test.** The first run timed the writer's notice of one-way silence from after a 2 s wait and so measured 1.9 s; it now measures from the fault. The 4.0 MB threshold for a backlog was borderline (4.01 MB) and was lowered to 2 MB; the proof is the 14 s wait of the synchronous commit. A first idea that a link dropping every connection after 256 KB would make small WAL records crawl across was **wrong**: with 100,000 small rows the standby made no progress either. The standby's log showed every reconnect starting at the same WAL position (the segment start `2/EF000000`, while replay stood 3.7 MB into the segment), so each connection re-sent the first 256 KB the standby already had. A 20 MB budget with 40 MB of WAL was then tried as the contrast and did **not** finish in 60 s (22.7 MB behind); it is recorded as unexplained, and the test asserts only the stall that was shown and explained.
+
+**Defects found by the fail-back test, both in the restore.** (1) After the fail-back the old writer was stopped and fenced; the restore started it and returned without checking that it streamed (`writer/stopped` branch), so the cleanup failed with "pg-standby is not streaming". It now rebuilds a stopped standby that does not stream. (2) A later `run-all-checks.sh` failed once at round-trip step 4 (the standby still held 2 tables after the primary dropped them): the round trip waits a fixed 2 s and the restore had returned while the standby was still replaying. The restore now waits until the standby has replayed the writer's position. Neither was caught earlier because the first fail-back run was judged by its PASS line before its cleanup exit status was read; the cleanup had failed.
+
+**Bash standard.** The plugin now reports standard version 8; the scripts conform.
+

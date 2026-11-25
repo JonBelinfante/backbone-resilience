@@ -115,17 +115,33 @@ Each test restores the starting state afterwards, so you can run them in any ord
   failover of an isolated writer there was a gap of **8.8 to 9.6 s and no overlap** between old and new writer. Control (no
   guard): the old writer kept writing and there were **14 to 16 s of two writers**.
 - **Limit and cost:** safety is bought with availability. A controller outage longer than the lease time stops a healthy writer. A
-  paused process that resumes can write once before its guard looks; only an epoch check in every write would close that (open).
+  paused process that resumes can write once before its guard looks; the write check (3.3) closes that for the tables that carry it.
 - **Pattern:** [lease and guard](../pg-replication/docs/patterns/lease-and-guard.md), [epoch](../pg-replication/docs/patterns/epoch-fencing-token.md).
 - **Register:** LEASE-01, LEASE-02.
 
-### 3.3 The lease follows the writer
+### 3.3 The write itself checks the lease
+- **Problem:** a writer that is paused (a long pause, a frozen host) while its lease runs out can resume and write once before its guard
+  looks, because the guard polls from outside.
+- **Mechanism:** a trigger on the table reads the lease inside every write and refuses it if the lease has expired.
+- **Test:** `test-resume-fence.sh`: the writer is frozen for 8 s with a 5 s lease and a client write waiting.
+- **Result:** with no check the write was **accepted 3.1 s after the lease ran out**; with the check it was refused with "fenced" and nothing was
+  written. A write under a valid lease, and a write on a node with no lease, were accepted.
+- **Limit:** opt-in per table, the node's own clock, lease time rather than a comparison of epochs.
+- **Pattern:** [lease and guard](../pg-replication/docs/patterns/lease-and-guard.md).
+- **Register:** LEASE-04.
+
+### 3.4 The lease follows the writer
 - **Problem:** after a failover the new writer must be fenced too, or it is unprotected.
 - **Mechanism:** the actor installs a lease at the new epoch, starts a guard beside the new writer, and repoints the controller.
 - **Test:** `test-lease-handover.sh`, including a kill part way through the hand-over.
 - **Result:** the new writer's lease was at epoch 1 and renewed over 9 s; with renewals stopped it was fenced within 5.8 s; a kill
   during the hand-over was repaired by a re-run.
 - **Register:** LEASE-03.
+
+### 3.5 The fail-back works the same way
+- **Test:** `test-lease-failback.sh`: fail over an isolated writer, rebuild the old node as a standby, then fail back.
+- **Result:** the epoch went to 2, the node that was first the writer held a lease at epoch 2 and kept it renewed, and the isolated writer was stopped. Two runs.
+- **Register:** LEASE-05.
 
 ---
 
@@ -221,7 +237,17 @@ Run `measure-recovery.sh` (about 13 minutes); it writes [recovery-report.md](../
 - **Lesson:** detection time, not promotion time, is the largest part of an RTO. Short timeouts shorten it but raise the risk of false alarms.
 - **Register:** NET-01 to NET-03.
 
-### 6.4 A dead standby cannot fill the primary's disk
+### 6.4 More link faults: jitter, bandwidth, one-way silence and a dropping link
+- **Test:** `test-link-faults.sh`.
+- **Result:**
+  - **Jitter** (100 ms plus or minus 100): asynchronous commits unaffected (80 to 84 ms); synchronous commits rose from a median of 79 to 87 ms to **364 to 385 ms**, with a wide spread.
+  - **Bandwidth limit** (512 KB/s): one 8 MB write left the standby 4 to 5 MB behind; a synchronous commit issued then waited **14.2 s** behind the backlog.
+  - **One-way silence** (5 s timeouts): with the standby's replies lost, the standby **still had the data** while the writer dropped it after 4.0 s; with the writer's WAL lost, the standby did not have it and the connection dropped after 4.7 s.
+  - **A link that drops every connection after 256 KB:** replication **stalls completely**, because each reconnect restarts at the start of the current WAL segment (the standby's log shows the same start position every time).
+- **Limit:** TCP hides packet loss, so loss itself is not shown (drops and silence are its effects); the byte budget at which replication finishes is not mapped.
+- **Register:** NET-04 to NET-07.
+
+### 6.5 A dead standby cannot fill the primary's disk
 - **Test:** `test-slot-limit.sh` (writes 1.5 GB of WAL; needs 6 GB free).
 - **Result:** the slot went `reserved` to `lost` at about 1 GB; the primary's WAL peaked at 944 MB against a bound of 1,536 MB and
   accepted a write every round; restore re-cloned the standby. **Defect found by the test:** a re-cloned standby kept an old slot that no
@@ -271,9 +297,9 @@ Run `measure-recovery.sh` (about 13 minutes); it writes [recovery-report.md](../
 
 Open and deliberately out of scope for now (details in the register, section 4):
 
-- **An epoch check in every write**, which closes the paused-process case (GAP-03).
+- **The write check on every table, a clock step, and a comparison of epochs between nodes** (GAP-03). The check exists (3.3) but is opt-in per table.
 - **A replicated controller** (needs a consensus store) (GAP-07).
-- **Packet loss, jitter, bandwidth and one-way faults** on the replication link (GAP-11).
+- **Real packet loss and reordering** (needs `tc netem`), and the byte budget at which a dropping link replicates (GAP-11).
 - **The application layer** (Phase 2): outbox, idempotent consumers, per-aggregate sequences, an independent invariant checker (GAP-12).
 - **The service layer** (Phase 3): a client with idempotency keys that reconnects through a failover, RTO under realistic load, rotation
   for application clients (GAP-10, GAP-15, SEC-06).
