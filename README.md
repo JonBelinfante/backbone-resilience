@@ -13,7 +13,7 @@ Most material on high availability describes designs. This repository shows the 
 - **Where the dangerous gaps are.** A failed-over node that is restarted by hand becomes a second writer. An idle writer can fool a failure detector. A controller that renews a lease turns its own outage into a writer outage. Each gap is reproduced, and then it is closed or stated as a trade-off.
 - **A way of proving things.** The tests use negative controls and kill tests at many points. Every result is recorded in a register.
 
-The repository also supplies evidence that a Target Operating Model for a payments-style platform can use. It holds measured failure behaviour and chaos-test results for the database layer. The risk register and the consistency tiers are not written yet. The [documentation plan](docs/documentation-plan.md) starts them with a failure-mode index.
+The repository also supplies evidence that a Target Operating Model for a payments-style platform can use. It holds measured failure behaviour and chaos-test results for the database layer. The [failure-mode index](docs/failure-modes.md) is the first draft of a risk register. The consistency tiers are not written yet.
 
 ## Who it is for
 

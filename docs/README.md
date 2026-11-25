@@ -32,7 +32,6 @@ This page lists every document by purpose. The root [README](../README.md) is th
 | [Adding an experiment](adding-an-experiment.md) | The template and the steps. |
 | [pg-replication README](../pg-replication/README.md) | Every script and library. |
 | [Python standard](python-standard.md) | The rules that the Python code follows. |
-| [Documentation plan](documentation-plan.md) | The work that is open on the documents themselves. |
 
 ## Background on the standards
 
