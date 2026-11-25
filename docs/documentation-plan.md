@@ -50,7 +50,7 @@ Sizes are small (S, under an hour), medium (M, one to three hours) and large (L,
 | WP0 | Decisions | Four answers, listed below. | None. | S | Done on 2026-11-25. |
 | WP1 | Fix the claims | Reworded openings in `README.md` and `CLAUDE.md`. The Target Operating Model sentence says what exists. The headline says when data is and is not lost. | None. | S | Done on 2026-11-25. |
 | WP13 | Remove hard-coded counts | The README no longer states the number of capabilities or tests. | None. | S | Done on 2026-11-25. |
-| WP3 | Evidence strength | New columns in the register for the number of runs and the date of the last run. The values come from the evidence log. | None. | M | Open. |
+| WP3 | Evidence strength | One Evidence column in the register for the number of runs and the date of the last run. The values come from the evidence log. | None. | M | Done on 2026-11-25. |
 | WP4 | Glossary | `docs/glossary.md` defines each term once: writer, replica, actor, controller, guard, lease, epoch, fence, witness, slot, timeline and the rest. | None. | M | Open. |
 | WP2 | Checks run for outsiders | `run-all-checks.sh` reports the lint as skipped when the plugin is absent, and everything else still runs. The README explains this. | WP0 | M | Open. |
 | WP5 | Architecture picture | A diagram in the README and `docs/architecture.md`. It shows the containers, the volumes, the proxy, the controller, the guard and the archive. | WP4 | M | Open. |
