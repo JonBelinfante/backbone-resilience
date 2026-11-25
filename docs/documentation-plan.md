@@ -52,7 +52,7 @@ Sizes are small (S, under an hour), medium (M, one to three hours) and large (L,
 | WP13 | Remove hard-coded counts | The README no longer states the number of capabilities or tests. | None. | S | Done on 2026-11-25. |
 | WP3 | Evidence strength | One Evidence column in the register for the number of runs and the date of the last run. The values come from the evidence log. | None. | M | Done on 2026-11-25. |
 | WP4 | Glossary | `docs/glossary.md` defines each term once: writer, replica, actor, controller, guard, lease, epoch, fence, witness, slot, timeline and the rest. | None. | M | Done on 2026-11-25. |
-| WP2 | Checks run for outsiders | `run-all-checks.sh` reports the lint as skipped when the plugin is absent, and everything else still runs. The README explains this. | WP0 | M | Open. |
+| WP2 | Checks run for outsiders | `run-all-checks.sh` reports the lint as skipped when the plugin is absent, and everything else still runs. The README explains this. | WP0 | M | Done on 2026-11-25. |
 | WP5 | Architecture picture | A diagram in the README and `docs/architecture.md`. It shows the containers, the volumes, the proxy, the controller, the guard and the archive. | WP4 | M | Open. |
 | WP8 | PostgreSQL primer | `docs/primer-postgresql-replication.md`, two pages on the write-ahead log, slots, timelines, promotion and `pg_rewind`, with links to the official documentation. | WP4 | M | Open. |
 | WP6 | Failure-mode index | `docs/failure-modes.md`. Each row gives a fault, its effect, how it is detected, what mitigates it, the test, the register row and the remaining risk. It seeds the risk register. | WP3, WP4 | L | Open. |

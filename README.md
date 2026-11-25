@@ -69,7 +69,7 @@ bash scripts/run-all-checks.sh             # lint, documents, Python checks, the
 bash scripts/test-auto-failover.sh         # a controller detects, fences and promotes; the client's downtime is timed
 ```
 
-The linter needs `BASHCHECK_WRAPPER` to be set. See [pg-replication/README.md](pg-replication/README.md) for the value. Every script accepts `--help`, except two log scripts that need `RUN_LOG_DIR` to be set. That README explains the limit.
+The Bash standard checker is a private plugin. `run-all-checks.sh` reports the lint as SKIP when `BASHCHECK_WRAPPER` is not set, and it still runs every other check. The skip is stated in the last line, so a skipped lint never reads as a full pass. See [pg-replication/README.md](pg-replication/README.md) for the value. Every script accepts `--help`, except two log scripts that need `RUN_LOG_DIR` to be set. That README explains the limit.
 
 The credentials are throwaway values and the ports are bound to loopback. Do not expose them, and never put real secrets in this repository.
 

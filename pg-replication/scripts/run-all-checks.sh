@@ -14,9 +14,11 @@ fi
 
 shopt -s inherit_errexit
 
-# Environment: BASHCHECK_WRAPPER and UP_PULL_POLICY are passed on to the checks they belong to.
+# Environment: BASHCHECK_WRAPPER is the bash-standard plugin's bin directory. When it is 'none',
+# the lint check is skipped and reported as skipped. UP_PULL_POLICY is passed on to the checks.
 # TEMP_DIR is where each check's output is kept until the run ends (default: temporary directory).
 readonly TEMP_DIR="${TEMP_DIR:-${TMPDIR:-/tmp}}"
+readonly BASHCHECK_WRAPPER="${BASHCHECK_WRAPPER:-none}"
 
 readonly SCRIPT_NAME="${0##*/}"
 # SCRIPT_DIR is the folder the script was started from, with its trailing slash (empty when
@@ -33,10 +35,9 @@ usage() {
 Usage: run-all-checks.sh [-h | --help] [--skip-roundtrip]
 
 Runs the checks and prints one line per result: PASS or FAIL, then the check's name.
-A failed check also prints the last lines of its output. Each check's full output
-goes to a temporary file that is removed afterwards.
+A failed check also prints the last lines of its output, kept in a temporary file.
 
-  lint       lint-scripts.sh: bash syntax, shellcheck, the Bash standard (needs BASHCHECK_WRAPPER)
+  lint       lint-scripts.sh: bash syntax, shellcheck, the Bash standard (SKIP if no wrapper)
   docs       check-docs.sh: relative links resolve, and named functions exist and are cited correctly
   python     check-python.sh: the house Python standard (ruff, mypy, pytest) and its own fixtures
   hygiene    check-hygiene.sh: calls only in libraries, loopback ports, no secret values
@@ -44,7 +45,7 @@ goes to a temporary file that is removed afterwards.
   roundtrip  test-failover-roundtrip.sh: the 17-step failover test (needs the stack up)
 
 Options:
-  --skip-roundtrip  run the lint check only
+  --skip-roundtrip  run every check except the round trip
 
 Environment: TEMP_DIR is where each check's output is kept (default: temporary directory).
 RUN_LOG_DIR is the run log directory (default: temporary directory).
@@ -71,13 +72,23 @@ run_check() {
   return 1
 }
 
+# Run the lint check, or report that it was skipped when the plugin's directory is not set.
+run_lint() {
+  if [[ "${BASHCHECK_WRAPPER}" == 'none' ]]; then
+    log WARN 'lint skipped: BASHCHECK_WRAPPER is not set'
+    printf 'SKIP lint (BASHCHECK_WRAPPER is not set, so the Bash standard was not checked)\n'
+    return 0
+  fi
+  run_check lint bash "${SCRIPT_DIR}lint-scripts.sh"
+}
+
 # Run the checks in order and return the number that failed as the exit status.
 run_checks() {
   log INFO 'running the checks'
   local run_roundtrip="${1:?run_roundtrip required}"
   local failures=0
 
-  if ! run_check lint bash "${SCRIPT_DIR}lint-scripts.sh"; then
+  if ! run_lint; then
     failures=$(( failures + 1 ))
   fi
   if ! run_check docs bash "${SCRIPT_DIR}check-docs.sh"; then
@@ -99,6 +110,10 @@ run_checks() {
   fi
   if (( failures > 0 )); then
     die 1 "${failures} check(s) failed"
+  fi
+  if [[ "${BASHCHECK_WRAPPER}" == 'none' ]]; then
+    printf 'ALL PASSED (the lint was skipped)\n'
+    return 0
   fi
   printf 'ALL PASSED\n'
 }
