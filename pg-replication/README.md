@@ -1,21 +1,19 @@
-# Phases 1 and 2: two Postgres nodes, WAL streaming, and failover safety
+# The PostgreSQL pair: replication, failover safety and recovery
 
-New here? Start with the [repository README](../README.md) and the [capability catalogue](../docs/capability-catalogue.md); this file is the working reference for the scripts.
+New here? Start with the [repository README](../README.md) and the [capability catalogue](../docs/capability-catalogue.md). This file is the working reference for the scripts and libraries.
 
 ## Where this sits in the roadmap
 
 | Phase | Scope | State |
 |---|---|---|
-| 1 | The Postgres pair: replication (sync/async), manual failover and fail-back, RPO/RTO, crash and network faults, secret rotation, guards, a second failure during a rejoin, backup and point-in-time recovery | Complete (every item automated; the remaining stretch items are named in the register, section 4) |
-| 2 | Failover safety (detector, epoch, actor, leases and guards) and the application layer (GAP-12: outbox, idempotent consumers, checker) | Failover safety built, proven and documented as patterns; remainder GAP-03 (the write check on every table), GAP-07 (a replicated controller), GAP-11 (packet loss); application layer not started |
-| 3 | Service layer: load generator, reconnecting clients (GAP-10), RTO under load (GAP-15), rotation for application clients (SEC-06) | Not started |
-| 4 to 6 | Hot-hot with partitioned ownership; multi-writer for commutative entries; chaos catalogue with SLI/error-budget reporting | Not started |
+| 1 | The PostgreSQL pair: synchronous and asynchronous replication, manual failover and fail-back, recovery measurements, crash and network faults, secret rotation, guards, a second failure during a rejoin, backup and point-in-time recovery. | Complete. Every item is automated. The register's section 4 names the stretch items that remain. |
+| 2 | Failover safety (detector, epoch, actor, leases and guards) and the application layer (outbox, idempotent consumers and an invariant checker). | Failover safety is built, proven and documented as patterns. Three gaps remain: the write check on every table (GAP-03), a replicated controller (GAP-07) and packet loss (GAP-11). The application layer is not started (GAP-12). |
+| 3 | The service layer: a load generator, reconnecting clients, recovery time under load, and rotation for application clients. | Not started. |
+| 4 to 6 | Hot-hot operation with partitioned ownership, multi-writer operation for commutative entries, and a chaos catalogue with error-budget reporting. | Not started. |
 
-This folder holds the Phase 1 foundation and the Phase 2 failover work. What is proven and what is not is in
-[capability-register.md](capability-register.md).
+This folder holds the Phase 1 foundation and the Phase 2 failover work. The [capability register](capability-register.md) shows what is proven and what is not.
 
-`pg-primary` (localhost:5433) accepts writes. `pg-standby` (localhost:5434) is a hot standby: it clones the
-primary on first start, then streams and replays the primary's write-ahead log (WAL). It serves read-only queries.
+The container `pg-primary` listens on `localhost:5433` and accepts writes. The container `pg-standby` listens on `localhost:5434`. It is a hot standby. It clones the primary on first start, and then it streams and replays the primary's write-ahead log (WAL). It serves read-only queries.
 
 ```
 client -> pg-primary --WAL stream--> pg-standby (read-only)
@@ -24,15 +22,10 @@ client -> pg-primary --WAL stream--> pg-standby (read-only)
 
 ## Requirements
 
-- Docker with Compose.
-- **Bash 5.0 or later** on the host. The scripts check this and exit with an error otherwise. macOS ships Bash 3.2
-  in `/bin/bash`, so install a newer one with `brew install bash` and make sure it comes first on your `PATH`
-  (`bash --version` should show 5.0+).
-- Every script accepts `-h` / `--help` (usage, options, environment, exit codes), even when a tool it needs is missing: the tool check runs after the options are read.
-- Check scripts against the Bash standard (version 8) with `bash scripts/lint-scripts.sh`. It needs `shellcheck`, and
-  the bash-standard plugin. `BASHCHECK_WRAPPER` is required and must be the plugin's `bin` directory (it holds
-  `check.py`, which verifies the checker's SHA-256 before running it). Set it once, for example in `~/.zshrc`:
-  `export BASHCHECK_WRAPPER="$HOME/.claude/local-marketplaces/bashcheck/bash-standard/bin"`.
+- You need Docker with Compose.
+- You need **Bash 5.0 or later** on the host. The scripts check this and exit with an error otherwise. macOS ships Bash 3.2 in `/bin/bash`. Install a newer version with `brew install bash`, and make sure that it comes first on your `PATH`. The command `bash --version` should show 5.0 or later.
+- Every script accepts `-h` and `--help`. The help shows the usage, options, environment and exit codes, even when a tool that the script needs is missing. The tool check runs after the options are read. Two log scripts are an exception, as the section on logs explains.
+- Check the scripts against the Bash standard, version 8, with `bash scripts/lint-scripts.sh`. The linter needs `shellcheck` and the bash-standard plugin. The variable `BASHCHECK_WRAPPER` is required. It must point to the plugin's `bin` directory, which holds `check.py`. That script verifies the checker's Secure Hash Algorithm 256 (SHA-256) checksum before it runs the checker. Set the variable once, for example in `~/.zshrc`: `export BASHCHECK_WRAPPER="$HOME/.claude/local-marketplaces/bashcheck/bash-standard/bin"`.
 
 ## Run
 
@@ -43,167 +36,173 @@ docker compose ps            # wait for both to be healthy
 ./scripts/verify-replication.sh          # write on primary, read on standby, confirm standby is read-only
 ```
 
-The scripts can be started from any folder (`bash x.sh`, `./x.sh` or a full path); they find their siblings from their own path.
-
-If the scripts are not executable: `chmod +x scripts/*.sh primary/*.sh standby/*.sh`.
+You can start the scripts from any folder with `bash x.sh`, `./x.sh` or a full path. They find their siblings from their own path. If the scripts are not executable, run `chmod +x scripts/*.sh primary/*.sh standby/*.sh`.
 
 ## Things to try
 
 | Experiment | Command | What to observe |
 |---|---|---|
-| Sync vs async | `./scripts/set-replication-mode.sh --mode sync` / `--mode async` / `--mode status` | `sync_state` becomes `sync`; RPO becomes 0 |
-| Standby outage, async | `docker stop pg-standby`, write to primary | Writes keep working; the slot retains WAL |
-| Standby outage, sync | `./scripts/set-replication-mode.sh --mode sync`, `docker stop pg-standby`, then insert on primary | The insert **hangs** until the standby returns. This is the availability cost of RPO 0 |
-| Catch-up | `docker start pg-standby` | Standby resumes from its position in the WAL, then converges |
-| Failover | `docker stop pg-primary`, then `./scripts/promote-standby-to-primary.sh` | Standby becomes writable; timeline increments |
-| Full failover and fail-back | `./scripts/run-all-checks.sh` (or `./scripts/test-failover-roundtrip.sh` alone) | 17 steps: fail over, rejoin the old primary with `pg_rewind`, write while it is down, compare both databases; then the starting state is restored |
+| Synchronous against asynchronous replication. | `./scripts/set-replication-mode.sh --mode sync`, `--mode async` or `--mode status`. | `sync_state` becomes `sync`, and the recovery point objective (RPO) becomes 0. |
+| A standby outage in asynchronous mode. | `docker stop pg-standby`, then write to the primary. | Writes keep working, and the slot retains the WAL. |
+| A standby outage in synchronous mode. | `./scripts/set-replication-mode.sh --mode sync`, then `docker stop pg-standby`, then insert on the primary. | The insert **hangs** until the standby returns. This is the availability cost of an RPO of 0. |
+| Catch-up. | `docker start pg-standby`. | The standby resumes from its position in the WAL, and then it converges. |
+| Failover. | `docker stop pg-primary`, then `./scripts/promote-standby-to-primary.sh`. | The standby becomes writable, and the timeline increments. |
+| Full failover and fail-back. | `./scripts/run-all-checks.sh`, or `./scripts/test-failover-roundtrip.sh` alone. | 17 steps fail over, rejoin the old primary with `pg_rewind`, write while it is down and compare both databases. The starting state is then restored. |
 
-Connect directly: `psql -h localhost -p 5433 -U postgres appdb` (password `postgres`).
-These are throwaway credentials for a local experiment only, so the ports are published on `127.0.0.1` only (see
-`docker-compose.yml`): the databases are not reachable from other machines on your network. If you have no `psql`
-on the host, use `docker exec -it pg-primary psql -U postgres appdb`. Keep the loopback binding; the well-known
-superuser password would otherwise be open to the whole network.
+You can connect directly with `psql -h localhost -p 5433 -U postgres appdb`. The password is `postgres`. These credentials are throwaway values for a local experiment only. The ports are published on `127.0.0.1` only, as `docker-compose.yml` shows, so other machines on your network cannot reach the databases. If you have no `psql` on the host, use `docker exec -it pg-primary psql -U postgres appdb`. Keep the loopback binding, because the well-known superuser password would otherwise be open to the whole network.
 
-## Scripts, libraries and the round-trip test
+## Scripts and libraries
+
+A script runs as a command. A library is sourced by a script and runs in the caller's process, so it adds no process or run log for each call. A library assumes that the importing script has `log` and `die`, which come from `runtime.sh`. Scripts import a library with `source "${SCRIPT_DIR}../lib/NAME.sh"` and a `# shellcheck source=` hint.
+
+### Everyday scripts
 
 | Script | What it does |
 |---|---|
-| `bring-down-database.sh --database primary\|standby` | Stops that container cleanly and confirms it is down |
-| `bring-up-database.sh --database primary\|standby` | Starts it, waits until healthy, and stops it again if two nodes would both be writable (split-brain guard) |
-| `show-container-info.sh --database primary\|standby` / `--container NAME` | Command-line wrapper over `lib/container.sh`: prints the container name for a database, or `true`/`false` for whether a container is running (fails if it does not exist). Other scripts import the library instead of calling this |
-| `run-database-sql.sh --container NAME [--bare] [--ask recovery]` | Command-line wrapper over `lib/database.sh`: runs the SQL on standard input with psql in that container (`--bare` for scriptable output), or `--ask recovery` prints `t` (standby) or `f` (accepts writes) |
-| `../lib/container.sh`, `../lib/database.sh` (libraries) | **Every docker and database call, reusable from any script.** `container::` has `name_of`, `is_running`, `inspect`, `image`, `network`, `volume`, `setting`, `health`, `start`, `stop`, `wait_healthy`, `compose_up`, `logs`, `rewind` (pg_rewind in a throwaway container) and `mark_standby`. `database::` has `run`, `bare`, `in_recovery`, `is_ready` and `drop_all_sql`. Imported with `source "${SCRIPT_DIR}../lib/NAME.sh"` (plus a `# shellcheck source=` hint); they run in the caller's process, so there is no extra process or run log per call. They assume the importing script has `log` and `die` (from `runtime.sh`) |
-| `../lib/access.sh`, `../lib/fault.sh`, `../lib/toxic.sh` (libraries) | Controlled faults and access: `access::` sets passwords and probes logins; `fault::` crashes, freezes, isolates a node, delays apply and generates WAL; `toxic::` adds network delay, silence or a cut link through Toxiproxy |
-| `../lib/backup.sh` (library) | `backup::prepare`, `take_base`, `wait_archived`, `restore_to` and `wait_promoted`: the base backup, the WAL archive and a restored copy to an LSN; the copy runs in its own container, not published to the host |
-| `../lib/mode.sh` (library) | `mode::record` and `mode::wanted`: remember the replication mode that was asked for, so a rejoin can switch sync on again |
-| `../lib/link.sh` (library) | `link::route` points the standby through the proxy, `link::commit_summary` and `link::staleness` time what a link fault does, `link::restart_places` reads the standby's log for where each reconnect began; shared by the two link-fault tests |
-| `../lib/epoch.sh`, `../lib/lease.sh`, `../lib/controller.sh`, `../lib/actor.sh` (libraries) | The failover control plane: `epoch::` the failover number that only goes up; `lease::` the writer's lease and its guard; `controller::` runs the detect-only controller in a container; `actor::` runs controller and actor for a test and times the client's view |
-| `../lib/measure.sh`, `../lib/judge.sh`, `../lib/pytools.sh` (libraries) | `measure::` statistics for trial results; `judge::` PASS/FAIL against targets; `pytools::` the pinned Python checkers |
-| `../services/failover_controller`, `../services/fence_guard` (Python, run in containers) | The detect-only failover controller (also renews the lease) and the guard that stops a writer whose lease has expired; each has its own tests, run by `check-python.sh` |
-| `../lib/story.sh` (a library, sourced not run) | The failover test's story-and-check layer as `story::` functions: `narrate` (ms timestamp, script name, message, also logged), `narrate_stream`, `narrate_query`, `run_logged`, `expect_equal`, and the helpers that combine a database or container call with narration: `run_statement`, `expect_query`, `expect_stopped`, `drop_all_tables`. Declares `# Depends: container database`, so a script importing it imports those two as well |
-| `primary/init-replication.sh`, `standby/entrypoint.sh` | Run inside the Postgres image, not on the host, so they cannot import `runtime.sh`. Each carries its own copy of the standard's functions (the same text, copied from the standard's example). `init-replication.sh` runs once, on an empty data volume (the image's init step); `entrypoint.sh` runs every time the standby container starts |
-| `runtime.sh` (a library, in this folder) | The Bash standard's own functions, copied unchanged from the standard's examples and checked word for word: `log`, `die`, `on_error`, `require_commands`, `require_integer`, `start_run_log`, `cleanup`, plus the run-log state. Every host script imports it with `source "${SCRIPT_DIR}runtime.sh"`, so none carries its own copy. Do not edit it; a change to the standard replaces it |
-| `run-with-log-folder.sh [--merge] -- COMMAND ...` | Runs COMMAND with one shared run folder (`run-<time>.<random>.d` inside `RUN_LOG_DIR`), so every script it starts, however deeply, logs there instead of scattering files. Prints the folder; `--merge` also prints the merged timeline |
-| `merge-run-logs.sh [--dir FOLDER]` | Read-only. Merges all run logs of one folder (default: the newest) into one timeline: `timestamp script LEVEL message`, sorted by timestamp |
-| `promote-standby-to-primary.sh` | Makes `pg-standby` the writable node (refuses while `pg-primary` answers, unless `--force`) |
-| `promote-primary-to-standby.sh` | Rebuilds the stopped old primary as a standby of the new writer: slot, checkpoint, `pg_rewind`, standby settings, start, wait until streaming |
-| `test-failover-roundtrip.sh` | 17-step test that tells its story (every line has a UTC time and the script name, with each SQL statement, the data it returned and each script's output): drop tables, replicate a row, fail over, write on the promoted standby, rejoin the old primary, write while the replica is down, compare both databases |
-| `restore-starting-state.sh` | Reads the current roles and returns to the starting state (`pg-primary` writes, `pg-standby` replicates): starts a stopped node, or fails back with `pg_rewind` after a failover. Run it after any experiment. It ends only when the primary reports the standby as streaming, and rebuilds a standby that cannot be trusted (`pg_basebackup`) |
-| `test-hard-kill.sh [--target roundtrip\|restore\|rotate] [--delays LIST]` | Kills a script and its docker commands with SIGKILL at each delay, then requires `restore-starting-state.sh` to recover the stack (primary writes, standby streaming). Changes the databases: throwaway stack only |
-| `test-divergence-rewind.sh` | 10-step test of a true divergence: the standby stops following, the primary acknowledges 3 writes it never receives, the standby is promoted (forced), then `pg_rewind` rebuilds the old primary. Requires a real rewind, the 3 writes gone and identical rows on both nodes. Changes the databases: throwaway stack only |
-| `test-replica-lag.sh` | 8-step test: the standby applies changes 6 s late; two debits decided on the replica both pass and overdraw the account (negative control), decided on the writer the second is declined; the guard `database::read_for_decision` refuses a replica; a replica read after `database::wait_for_replay` is fresh. Changes the databases: throwaway stack only |
-| `test-slot-limit.sh` | 7-step test of the WAL limit for a dead standby: stops the standby and writes WAL until its slot is invalidated (about 1 GB, about 1.5 minutes), requires the primary to keep accepting writes with a bounded WAL directory, the standby to fail to stream, and `restore-starting-state.sh` to re-clone it and replace the slot. Needs 6 GB free. Changes the databases: throwaway stack only |
-| `rotate-secret.sh [--secret replication\|superuser] [--keep-old]` | Rotates a database password with no failed write: the replication secret by overlap (a second role, the name alternates between replicator_a and replicator_b and is kept in `secrets/pg-replication-user.txt`), the superuser secret in place. Rolls back before the secret files change; run it again after any interruption and it converges. See [docs/secrets-rotation.md](docs/secrets-rotation.md) |
-| `test-rotation.sh` (`ROTATION_MODE=sync` for synchronous replication) | 7-step test: three rotations (replication, superuser, replication) under a write probe; requires 0 failed writes, the standby streaming as the role in the secret file, one replication role left, and a standby rebuilt from an empty volume joining with the new secrets. Changes the databases and the secret files: throwaway stack only |
-| `test-maintenance-lock.sh` | 5-step test of the maintenance lock: two rotations together (second refused), a rotation during a rebuild (refused; the rebuild completes), a stale lock taken over, a reused process id not honoured. Rotates the secret and crashes the writer: throwaway stack only |
-| `test-load.sh` | 6-step test of 16 concurrent clients (`pgbench`) inserting payments with idempotency keys from a million values: no failed transaction, duplicates rejected, money conserved exactly, standby identical in async and sync (throughput reported for both), and a writer killed mid-run recovers whole. `LOAD_CLIENTS`, `LOAD_SECONDS`, `LOAD_KEYS` resize it. Throwaway stack only |
-| `test-network-faults.sh` | 7-step test of the replication link through Toxiproxy (about 5 minutes): async delay (commits unaffected, standby stale by the delay), sync delay (a commit costs a round trip), a link cut for 5 s (commits resume within one retry interval), a silent link (noticed after the sender timeout, 60 s by default), and RPO under delay then a writer crash. Changes the databases and replication settings and restores them: throwaway stack only |
-| `test-fencing.sh` | 6-step test of start-time fencing: after a failover a plain `docker start` of the old primary must come up read-only and refuse a write; a control with the fence lifted shows the write accepted. Crashes the writer: throwaway stack only |
-| `test-detector.sh` | 7-step test of the detect-only failover controller (`services/failover_controller`): healthy, a short freeze (no fail-over), a hung writer and a crash (fail-over, timed), a controller cut off from a live writer (hold), and the idle-writer trap (a false fail-over with a short witness window). Pauses and crashes the writer: throwaway stack only |
-| `test-auto-failover.sh` | 3-step test of automatic failover: the detect-only controller plus `act-on-failover.sh` (raise the epoch, kill the old writer, promote). A short freeze does nothing; a crash and a hung writer each end with a client write succeeding on the new writer, timed. Crashes and freezes the writer: throwaway stack only |
-| `act-on-failover.sh` | waits for the controller's `fail-over` decision (`--controller NAME`, `EPOCH_FILE`), then raises the epoch, kills the old writer and promotes the standby; a re-run is safe |
-| `test-actor-kill.sh` | 3-step test: SIGKILL the actor after the epoch, kill and promote steps (a test hook), check the half-done state, re-run it and require one epoch and a writable standby each time. Freezes the writer: throwaway stack only |
-| `test-two-actors.sh` | 2-step test: two actors started at once against a frozen writer; with the lock exactly one acts, and the control (`ACTOR_LOCK=off`) shows both going ahead and racing on the epoch file. Freezes the writer: throwaway stack only |
-| `test-lease-fence.sh` | 3-step test of the writer's lease (a row renewed by the controller) and the guard that stops the writer when it runs out; a renewed lease, a cut path, and a control without the guard. Cuts the controller's path: throwaway stack only |
-| `test-lease-failover.sh` | 2-step test: an isolated writer the actor may not kill; it waits for the lease and promotes. With the guard there is no overlap between the old and new writer; without it, both write for 14 to 16 s |
-| `test-lease-handover.sh` | 3-step test: after a failover of an isolated writer the actor gives the new writer a lease at the new epoch and repoints the controller; the lease stays renewed, and when renewals stop the new writer is stopped by its guard |
-| `test-actor-timed-kill.sh` | SIGKILL the actor's whole process group at set delays (0.1 to 0.9 s after it starts, so the kill can land inside the promote script), then run it again; one epoch and a writable standby each time. `--delays LIST`. Crashes the writer: throwaway stack only |
-| `test-controller-kill.sh` | 2-step test: a controller killed and restarted within the lease time costs nothing; one left dead stops the writer when the lease runs out |
-| `test-clone-rebuild.sh` | 4-step test: synchronous replication on and the writer naming a synchronous standby; a failover; the old node is rebuilt by cloning the writer (`--clone`); the rebuilt node streams, names no synchronous standby, and holds identical rows |
-| `test-replication-modes.sh` | 4-step test: a mode switch with no restart; asynchronous with the standby stopped (commits go on, the slot keeps WAL); synchronous with it stopped (a commit waits, then completes); synchronous with the standby SIGKILLed mid-commit (no acknowledged row lost) |
-| `test-guards.sh` | 3-step test: the promotion guard refuses while the primary answers; with the fence lifted, the split-brain guard stops a restarted old primary; a start with one writer and one replica is allowed |
-| `test-rejoin-failure.sh` (`--control`) | 4-step test: the writer crashes, the standby is promoted and takes rows; the rejoin is started and the new writer is killed while the rebuild marker exists; the restore brings back writer and replica with every acknowledged row on both. `--control` runs without the kill |
-| `test-point-in-time.sh` | 5-step test of point-in-time recovery: rows, a base backup, more rows, a mistaken delete (replicated within seconds); the restore to the recorded LSN gives the rows and checksum from before the delete; the control restore to the end of the archive gives none (about 2 minutes) |
-| `check-hygiene.sh` | Read-only: no direct `docker`, `psql` or `pgbench` calls in host scripts, every published port on loopback, no tracked file with a private key or token. Runs in `run-all-checks.sh` |
-| `check-run-timeline.sh` | Runs two scripts under one run folder and checks the merged timeline: both present, millisecond timestamps, never out of order. Runs in `run-all-checks.sh` |
-| `test-lease-failback.sh` | 3-step test: a failover of an isolated writer with the lease handed on, the old node rebuilt as a standby, then the fail-back with the roles swapped: epoch 2, the first node leased again at epoch 2, the isolated writer stopped |
-| `test-resume-fence.sh` | 3-step test: a writer paused past its lease with a client write waiting. With no check it accepts the write 3.1 s late; with the write check (`lease::install_write_check`) it is refused as "fenced"; a valid lease and a missing lease are not in the way |
-| `test-link-faults.sh` | 6-step test of the replication link under jitter, a bandwidth limit, silence in one direction only, and a link that drops every connection after a byte budget (about 5 minutes). Packet loss itself cannot be shown through Toxiproxy |
-| `test-sync-after-failover.sh` | 3-step measurement: from synchronous replication, crash and promote; the new writer is asynchronous with no standby yet acknowledges a write; the old node rejoins and the rejoin switches sync on again, which closes the window (8.0 s). Crashes the writer: throwaway stack only |
-| `measure-recovery.sh [--scenarios LIST] [--results FILE]` | Measures **RPO and RTO and crash recovery**: runs failure trials (stop, crash, async, sync, control, and with `--scenarios crash-matrix` standby-crash, primary-restart, midtx, checkpoint) under a write prober, saves one result line per trial in `docs/recovery-results.txt`, then writes the report. Exits 1 if a trial fails or a target is missed. Takes about 30 s a trial (`MEASURE_TRIALS`, `MEASURE_LAGS`, `MEASURE_SYNC_LAG`, `DECISION_DELAY`, `RTO_TARGET_SECONDS`). Changes the databases: throwaway stack only |
-| `write-recovery-report.sh [--results FILE] [--report FILE]` | Judges saved trial results against the targets and writes [docs/recovery-report.md](docs/recovery-report.md): verdict per case, RTO and RPO tables, every trial, limits. Can regenerate the report from saved results without re-running the trials |
-| `run-recovery-trial.sh --scenario NAME [--lag S]` | One trial: restores the stack, starts the prober, causes the failure, promotes, reports, restores again. Prints one `RESULT` line |
-| `run-write-prober.sh --ledger FILE --stop-file FILE` | Writes numbered rows about every 100 ms and logs each attempt (start, end, node, ok or fail) to a ledger outside both databases; follows a failover by trying the node that last accepted a write, then the other |
-| `report-ledger.sh --ledger FILE --node NODE` | Compares a ledger with the surviving node: acknowledged-but-missing (lost) writes, in-doubt writes, and the longest outage |
-| `run-all-checks.sh [--skip-roundtrip]` | One line per check: `PASS lint`, `PASS docs`, `PASS python`, `PASS roundtrip`. A failure also prints the last 15 lines of that check's output |
-| `check-python.sh` | Checks the Python against the house standard ([docs/python-standard.md](../docs/python-standard.md)): ruff, mypy strict and pytest at pinned versions in a container, refuses `noqa` and `type: ignore`, and tests the checkers against good and bad fixtures. About 5 s; the first run builds the tools image (network needed) |
-| `check-docs.sh` | Read-only check of the documents: every relative link must exist, and every function named in `docs/` must be defined in a script (and, on a line that links a script, defined in that script). Uses `check-docs.awk` |
-| `report-refactoring.sh [--mode MODE] [--show NAME]` | Read-only refactoring aid. Modes: `duplicates`, `usage` (reuse map), `size`, `all`, `brief` (one tagged line per finding), `baseline` (save `refactor-baseline.txt`), `changes` (diff against it). `--show NAME` prints every copy of a function and how they differ. Uses `report-refactoring.awk` |
+| `verify-replication.sh` | Writes a row on the primary, reads it on the standby, and confirms that the standby is read-only. |
+| `set-replication-mode.sh --mode async\|sync\|status` | Switches the primary between asynchronous and synchronous replication with no restart. It records the wanted mode, so a rejoin can restore it. |
+| `bring-down-database.sh --database primary\|standby` | Stops that container cleanly and confirms that it is down. |
+| `bring-up-database.sh --database primary\|standby` | Starts the container and waits until it is healthy. It stops the container again if both nodes would be writable, which is the split-brain guard. |
+| `promote-standby-to-primary.sh` | Makes `pg-standby` the writable node. It refuses while `pg-primary` answers, unless `--force` is given. It also fences the old primary's data directory. |
+| `promote-primary-to-standby.sh [--clone]` | Rebuilds the stopped old primary as a standby of the new writer. It creates the slot, runs a checkpoint, runs `pg_rewind`, writes the standby settings, starts the node, and waits until it streams. With `--clone` it always copies the whole data directory. |
+| `restore-starting-state.sh` | Reads the current roles and returns to the starting state, where `pg-primary` writes and `pg-standby` replicates. It starts a stopped node, or fails back with `pg_rewind` after a failover. It starts the writer candidate when both nodes are stopped. It ends only when the primary reports the standby as streaming and the standby has replayed the writer's position. Run it after any experiment. |
+| `rotate-secret.sh [--secret replication\|superuser] [--keep-old]` | Rotates a database password with no failed write. The replication secret rotates by overlap, with a second role whose name alternates between `replicator_a` and `replicator_b` and is kept in `secrets/pg-replication-user.txt`. The superuser secret rotates in place. It rolls back before the secret files change, and a re-run converges. See [docs/secrets-rotation.md](docs/secrets-rotation.md). |
+| `act-on-failover.sh` | Waits for the controller's `fail-over` decision, using `--controller NAME` and `EPOCH_FILE`. It then raises the epoch, kills the old writer and promotes the standby. A re-run is safe. |
+| `collect-logs.sh` | Saves container logs into `logs/`. Run it **before** `docker compose down`, because removing containers deletes their logs. |
+| `show-container-info.sh --database primary\|standby` or `--container NAME` | A command-line wrapper over `lib/container.sh`. It prints the container name for a database, or `true` or `false` for whether a container is running. |
+| `run-database-sql.sh --container NAME [--bare] [--ask recovery]` | A command-line wrapper over `lib/database.sh`. It runs the SQL on standard input with `psql` in that container. With `--ask recovery` it prints `t` for a standby and `f` for a node that accepts writes. |
 
-Notes:
+### Libraries
 
-- The names `primary` and `standby` always mean the containers `pg-primary` and `pg-standby`, whatever role each
-  has after a failover.
-- The test tidies up after itself: whether it passes, fails or is interrupted, it then runs
-  `restore-starting-state.sh` and drops its test table, so it can be run again straight away.
+| Library | What it holds |
+|---|---|
+| `lib/container.sh` and `lib/database.sh` | Most `docker` calls and every `psql` call. `container::` has `name_of`, `is_running`, `inspect`, `image`, `network`, `volume`, `setting`, `health`, `start`, `stop`, `wait_healthy`, `compose_up`, `logs`, `rewind` and `mark_standby`. `database::` has `run`, `bare`, `in_recovery`, `is_ready` and `drop_all_sql`. |
+| `lib/story.sh` | The test narration and checks, as `story::` functions. They are `narrate`, `narrate_stream`, `narrate_query`, `run_logged`, `expect_equal`, `run_statement`, `expect_query`, `expect_stopped` and `drop_all_tables`. It declares `# Depends: container database`, so a script that imports it imports those two as well. |
+| `lib/access.sh`, `lib/fault.sh` and `lib/toxic.sh` | Controlled faults and access. `access::` sets passwords and probes logins. `fault::` crashes, freezes and isolates a node, delays apply, and generates WAL. `toxic::` adds network delay, silence or a cut link through Toxiproxy. |
+| `lib/fence.sh` and `lib/lock.sh` | `fence::` marks a stopped node's data directory so that any start is read-only. `lock::` holds the maintenance lock that one script at a time may take. |
+| `lib/epoch.sh`, `lib/lease.sh`, `lib/controller.sh` and `lib/actor.sh` | The failover control plane. `epoch::` keeps the failover number, which only goes up. `lease::` holds the writer's lease and its guard. `controller::` runs the detect-only controller in a container. `actor::` runs the controller and the actor for a test and times the client's view. |
+| `lib/backup.sh` | `backup::prepare`, `take_base`, `wait_archived`, `restore_to` and `wait_promoted`. They manage the base backup, the WAL archive and a restored copy at a log sequence number (LSN). The copy runs in its own container, which is not published to the host. |
+| `lib/mode.sh` | `mode::record` and `mode::wanted` remember the replication mode that was asked for, so a rejoin can switch synchronous replication on again. |
+| `lib/link.sh` | `link::route` points the standby through the proxy. `link::commit_summary` and `link::staleness` time what a link fault does. `link::restart_places` reads the standby's log for the place where each reconnect began. The two link-fault tests share it. |
+| `lib/measure.sh`, `lib/judge.sh` and `lib/pytools.sh` | `measure::` gives statistics for trial results. `judge::` reports PASS or FAIL against targets. `pytools::` runs the pinned Python checkers. |
+| `runtime.sh` | The Bash standard's own functions, copied unchanged from the standard's examples and checked word for word. They are `log`, `die`, `on_error`, `require_commands`, `require_integer`, `start_run_log` and `cleanup`, with the run-log state. Every host script imports it, so none carries its own copy. Do not edit it. A change to the standard replaces it. |
+| `primary/init-replication.sh` and `standby/entrypoint.sh` | These run inside the PostgreSQL image, not on the host, so they cannot import `runtime.sh`. Each carries its own copy of the standard's functions. The first runs once on an empty data volume. The second runs every time the standby container starts. |
+| `../services/failover_controller` and `../services/fence_guard` | Python services that run in containers. The first is the detect-only failover controller, which also renews the lease. The second is the guard that stops a writer whose lease has expired. Each has its own tests, which `check-python.sh` runs. |
+
+### Tests of replication, failover and recovery
+
+Every test restores the starting state when it ends, whether it passes, fails or is interrupted. Every test changes the databases, so run it only on the throwaway stack.
+
+| Script | What it does |
+|---|---|
+| `test-failover-roundtrip.sh` | A 17-step test that tells its story. Every line has a UTC time and the script name, with each SQL statement, the data it returned and each script's output. It drops tables, replicates a row, fails over, writes on the promoted standby, rejoins the old primary, writes while the replica is down, and compares both databases. |
+| `test-replication-modes.sh` | A 4-step test. It switches the mode with no restart. It then tests asynchronous mode with the standby stopped, synchronous mode with the standby stopped, and synchronous mode with the standby killed mid-commit. |
+| `test-clone-rebuild.sh` | A 4-step test. Synchronous replication is on, and the writer names a synchronous standby. After a failover, the old node is rebuilt by cloning the writer. The rebuilt node streams, names no synchronous standby and holds identical rows. |
+| `test-guards.sh` | A 3-step test. The promotion guard refuses while the primary answers. With the fence lifted, the split-brain guard stops a restarted old primary. A start with one writer and one replica is allowed. |
+| `test-divergence-rewind.sh` | A 10-step test of a true divergence. The standby stops following, and the primary acknowledges 3 writes that it never sends. The standby is promoted by force, and `pg_rewind` rebuilds the old primary. The test requires a real rewind, the 3 writes gone and identical rows on both nodes. |
+| `test-rejoin-failure.sh [--control]` | A 4-step test. The writer crashes, and the standby is promoted and takes rows. The rejoin starts, and the new writer is killed while the rebuild marker exists. The restore must bring back a writer and a replica with every acknowledged row on both. The control runs without the kill. |
+| `test-point-in-time.sh` | A 5-step test of point-in-time recovery, which takes about 2 minutes. It writes rows, takes a base backup, writes more rows, and then deletes every row by mistake. The mistake replicates within seconds. A restore to the recorded LSN returns the rows and the checksum from before the delete. The control restore to the end of the archive returns none. |
+| `test-hard-kill.sh [--target roundtrip\|restore\|rotate] [--delays LIST]` | Kills a script and its Docker commands with SIGKILL at each delay. It then requires `restore-starting-state.sh` to recover the stack, with the primary writing and the standby streaming. |
+
+### Tests of detection, the actor and fencing
+
+| Script | What it does |
+|---|---|
+| `test-fencing.sh` | A 6-step test of start-time fencing. After a failover, a plain `docker start` of the old primary must come up read-only and refuse a write. A control with the fence lifted shows the write accepted. |
+| `test-detector.sh` | A 7-step test of the detect-only failover controller. It covers a healthy writer, a short freeze that causes no fail-over, a hung writer and a crash that cause timed fail-overs, and a controller cut off from a live writer that holds. It also covers the idle-writer trap, where a short witness window causes a false fail-over. |
+| `test-auto-failover.sh` | A 3-step test of automatic failover. The controller and `act-on-failover.sh` raise the epoch, kill the old writer and promote. A short freeze does nothing. A crash and a hung writer each end with a client write that succeeds on the new writer, and the test times it. |
+| `test-actor-kill.sh` | A 3-step test. It kills the actor with SIGKILL after the epoch, kill and promote steps, through a test hook. It checks the half-done state, runs the actor again, and requires one epoch and a writable standby each time. |
+| `test-actor-timed-kill.sh [--delays LIST]` | Kills the actor's whole process group at set delays, from 0.1 to 0.9 seconds after it starts. The kill can land inside the promote script. It then runs the actor again and requires one epoch and a writable standby each time. |
+| `test-two-actors.sh` | A 2-step test. Two actors start at once against a frozen writer. With the lock, exactly one acts. In the control, `ACTOR_LOCK=off` lets both go ahead and race on the epoch file. |
+| `test-controller-kill.sh` | A 2-step test. A controller that is killed and restarted within the lease time costs nothing. One that is left dead stops the writer when the lease runs out. |
+| `test-lease-fence.sh` | A 3-step test of the writer's lease and the guard that stops the writer when the lease runs out. It covers a renewed lease, a cut path, and a control without the guard. |
+| `test-lease-failover.sh` | A 2-step test. The actor may not kill an isolated writer, so it waits for the lease and then promotes. With the guard there is no overlap between the old and new writer. Without it, both write for 14 to 16 seconds. |
+| `test-lease-handover.sh` | A 3-step test. After a failover of an isolated writer, the actor gives the new writer a lease at the new epoch and repoints the controller. The lease stays renewed. When renewals stop, the guard stops the new writer. |
+| `test-lease-failback.sh` | A 3-step test. It fails over an isolated writer with the lease handed on, rebuilds the old node as a standby, and then fails back with the roles swapped. The epoch becomes 2, the first node holds a lease at epoch 2, and the isolated writer is stopped. |
+| `test-resume-fence.sh` | A 3-step test. A writer is paused past its lease with a client write waiting. With no check, it accepts the write 3.1 seconds late. With the write check from `lease::install_write_check`, it refuses the write as "fenced". A valid lease and a missing lease are not blocked. |
+| `test-sync-after-failover.sh` | A 3-step measurement. It crashes the writer under synchronous replication and promotes the standby. The new writer is asynchronous and acknowledges a write with no standby. The old node rejoins, and the rejoin switches synchronous replication on again, which closes the window after 8.0 seconds. |
+
+### Tests of faults, load and secrets, and the measurement runners
+
+| Script | What it does |
+|---|---|
+| `test-replica-lag.sh` | An 8-step test. The standby applies changes 6 seconds late. Two debits that are decided on the replica both pass and overdraw the account, which is the negative control. Decided on the writer, the second debit is declined. The guard `database::read_for_decision` refuses a replica. A replica read after `database::wait_for_replay` is fresh. |
+| `test-slot-limit.sh` | A 7-step test of the WAL limit for a dead standby. It stops the standby and writes WAL until its slot is invalidated, at about 1 GB and about 1.5 minutes. The primary must keep accepting writes with a bounded WAL directory, and the standby must fail to stream. `restore-starting-state.sh` must clone the standby and replace the slot. It needs 6 GB free. |
+| `test-load.sh` | A 6-step test of 16 concurrent clients that use `pgbench`. They insert payments with idempotency keys from a million values. No transaction fails, duplicates are rejected, money is conserved exactly, and the standby is identical in both modes. The test reports the throughput for both modes. A writer that is killed mid-run recovers whole. `LOAD_CLIENTS`, `LOAD_SECONDS` and `LOAD_KEYS` resize it. |
+| `test-network-faults.sh` | A 7-step test of the replication link through Toxiproxy, which takes about 5 minutes. It covers asynchronous delay, synchronous delay, a link cut for 5 seconds, a silent link, and the RPO under delay followed by a writer crash. |
+| `test-link-faults.sh` | A 6-step test of the replication link under jitter, a bandwidth limit, silence in one direction and a link that drops every connection after a byte budget. It takes about 5 minutes. Packet loss itself cannot be shown through Toxiproxy. |
+| `test-rotation.sh` | A 7-step test. It rotates the replication secret, the superuser secret and the replication secret again under a write probe. It requires no failed write, a standby that streams as the role in the secret file, one replication role left, and a standby rebuilt from an empty volume that joins with the new secrets. `ROTATION_MODE=sync` runs it under synchronous replication. |
+| `test-maintenance-lock.sh` | A 5-step test of the maintenance lock. Two rotations together must give a refusal for the second. A rotation during a rebuild is refused, and the rebuild completes. A stale lock is taken over, and a reused process identifier is not honoured. |
+| `measure-recovery.sh [--scenarios LIST] [--results FILE]` | Measures the RPO, the RTO and crash recovery. It runs failure trials under a write prober, saves one result line for each trial in `docs/recovery-results.txt`, and writes the report. It exits with status 1 if a trial fails or a target is missed. A trial takes about 30 seconds. |
+| `write-recovery-report.sh [--results FILE] [--report FILE]` | Judges saved trial results against the targets and writes [docs/recovery-report.md](docs/recovery-report.md). It can regenerate the report from saved results without running the trials again. |
+| `run-recovery-trial.sh --scenario NAME [--lag S]` | Runs one trial. It restores the stack, starts the prober, causes the failure, promotes, reports, and restores again. It prints one `RESULT` line. |
+| `run-write-prober.sh --ledger FILE --stop-file FILE` | Writes numbered rows about every 100 milliseconds. It logs each attempt, with its start, end, node and outcome, to a ledger outside both databases. It follows a failover by trying the node that last accepted a write and then the other. |
+| `report-ledger.sh --ledger FILE --node NODE` | Compares a ledger with the surviving node. It reports acknowledged writes that are missing, writes in doubt, and the longest outage. |
+
+### Checks and tools
+
+| Script | What it does |
+|---|---|
+| `run-all-checks.sh [--skip-roundtrip]` | Prints one line for each check, which is PASS or FAIL. The checks are `lint`, `docs`, `python`, `hygiene`, `timeline` and `roundtrip`. A failure also prints the last 15 lines of that check's output. |
+| `lint-scripts.sh` | Runs `bash -n`, ShellCheck and the Bash standard checker on every shell file. It needs `BASHCHECK_WRAPPER`. |
+| `check-python.sh` | Checks the Python against the [house standard](../docs/python-standard.md) with ruff, mypy in strict mode and pytest at pinned versions in a container. It refuses `noqa` and `type: ignore`, and it tests the checkers against good and bad fixtures. It takes about 5 seconds. The first run builds the tools image and needs the network. |
+| `check-docs.sh` | Checks the documents without changing them. Every relative link must exist. Every function that `docs/` names must be defined in a script. On a line that links a script, the function must be defined in that script. It uses `check-docs.awk`. |
+| `check-hygiene.sh` | Checks that host scripts make no direct `docker`, `psql` or `pgbench` calls, that every published port is on loopback, and that no tracked file holds a private key or an access token. |
+| `check-run-timeline.sh` | Runs two scripts under one run folder and checks the merged timeline. Both scripts must be present, every line must have a millisecond timestamp, and the timestamps must never go backwards. |
+| `run-with-log-folder.sh [--merge] -- COMMAND ...` | Runs the command with one shared run folder, named `run-<time>.<random>.d`, inside `RUN_LOG_DIR`. Every script that the command starts logs there, however deeply. It prints the folder. With `--merge` it also prints the merged timeline. |
+| `merge-run-logs.sh [--dir FOLDER]` | Merges all run logs of one folder into one timeline. The default is the newest folder. The lines read `timestamp script LEVEL message` and are sorted by timestamp. It does not change any file. |
+| `report-refactoring.sh [--mode MODE] [--show NAME]` | A read-only refactoring aid. The modes are `duplicates`, `usage`, `size`, `all`, `brief`, `baseline` and `changes`. `--show NAME` prints every copy of a function and how the copies differ. It uses `report-refactoring.awk`. |
+
+## Notes
+
+- The names `primary` and `standby` always mean the containers `pg-primary` and `pg-standby`, whatever role each has after a failover.
 - If the stack cannot be restored, `docker compose down -v` **deletes both databases** and starts clean.
-- Failing back under asynchronous replication can lose writes the new writer had not yet sent to the node being
-  promoted.
-- Set `RUN_LOG_DIR=logs` to keep the story as a run log, and `UP_PULL_POLICY=never` if Docker Hub is unreachable.
-- Passwords are read from the writer container's environment, never stored in the scripts.
+- A fail-back under asynchronous replication can lose writes that the new writer had not yet sent to the node that is promoted.
+- Set `RUN_LOG_DIR=logs` to keep the story as a run log. Set `UP_PULL_POLICY=never` if Docker Hub is unreachable.
+- The scripts read passwords from the writer container's environment. They never store passwords in the scripts.
 
 ## Logs and audit trail
 
-Every script run writes one run log, following the Bash standard. Each script appends timestamped
-`INFO`, `WARN` and `ERROR` lines (when it started, each step, decisions, and how it ended) to its own file,
-and a failure records the line, the function and the command that failed.
+Every script run writes one run log, as the Bash standard requires. Each script appends timestamped `INFO`, `WARN` and `ERROR` lines to its own file. The lines show when it started, each step, its decisions and how it ended. A failure records the line, the function and the command that failed. Decisions, such as refusing or performing a promotion or changing the synchronous mode, appear as `DECISION:` and `CHANGE:` lines.
 
-Known limit: `run-with-log-folder.sh` and `merge-run-logs.sh` read `RUN_LOG_DIR` when they start, so `--help` on them needs
-`RUN_LOG_DIR` set (or the default, which the other scripts supply). Fixing it needs the standard to allow a folder read after the
-library imports; it does not change any result.
+Known limit: `run-with-log-folder.sh` and `merge-run-logs.sh` read `RUN_LOG_DIR` when they start. Their `--help` therefore needs `RUN_LOG_DIR` to be set. The other scripts supply a default. A fix needs the standard to allow a folder read after the library imports. The limit does not change any result.
 
 | File | Contents |
 |---|---|
-| `$RUN_LOG_DIR/<script>-<UTC time>.<random>.log` | One run of one script (the `.log` suffix is added after creation; see CR-8 in `docs/change-request-bash-standard.md`). `RUN_LOG_DIR` defaults to the temporary directory and the folder must exist. Set `RUN_LOG_DIR=logs` to keep run logs here (git-ignored) |
-| `logs/container-<name>-<time>.log` | Container logs (Postgres server log plus init/entrypoint lines), saved by `./scripts/collect-logs.sh`. `LOG_DIR` sets the folder (default `logs`, created if missing) |
+| `$RUN_LOG_DIR/<script>-<UTC time>.<random>.log` | One run of one script. The `.log` suffix is added after creation, as CR-8 in `docs/change-request-bash-standard.md` explains. `RUN_LOG_DIR` defaults to the temporary directory, and the folder must exist. Set `RUN_LOG_DIR=logs` to keep run logs in this folder, which git ignores. |
+| `logs/container-<name>-<time>.log` | Container logs, which `./scripts/collect-logs.sh` saves. They hold the PostgreSQL server log and the init and entrypoint lines. `LOG_DIR` sets the folder. The default is `logs`, and the script creates it if it is missing. |
 
-A script's own results still go to the terminal as before, but its output is no longer copied into the run log, and
-there is no `runs.log` index or `TRACE=1` command trace. Use `bash -x scripts/<script>.sh` to trace a run.
-One test run writes 16 run logs (it was 87 when the SQL and container helpers were scripts rather than libraries), so for a whole run use `RUN_LOG_DIR=logs bash scripts/run-with-log-folder.sh --merge -- bash scripts/test-failover-roundtrip.sh`. Run log lines carry UTC timestamps to the millisecond (`2026-11-14T08:14:36.385Z`), so the merged timeline orders events from different scripts correctly; lines in the very same millisecond keep each file's own order.
-Run `./scripts/collect-logs.sh` **before** `docker compose down`, because removing containers deletes their logs.
-Decisions (refusing or performing a promotion, changing sync mode) are logged as `DECISION:` / `CHANGE:` lines in the run log.
-Logs live inside this OneDrive folder; they are small text files, but set `LOG_DIR=/some/other/path` to keep them out of sync.
+A script's own results still go to the terminal. Its output is not copied into the run log, and there is no `runs.log` index and no `TRACE=1` command trace. Use `bash -x scripts/<script>.sh` to trace a run.
+
+One test run writes 16 run logs. It wrote 87 when the SQL and container helpers were scripts and not libraries. To collect a whole run, use `RUN_LOG_DIR=logs bash scripts/run-with-log-folder.sh --merge -- bash scripts/test-failover-roundtrip.sh`. The log lines carry UTC timestamps to the millisecond, such as `2026-11-14T08:14:36.385Z`. The merged timeline therefore orders events from different scripts correctly. Lines in the same millisecond keep their own file's order.
+
+The logs are small text files in the `logs/` folder. Set `LOG_DIR=/some/other/path` to keep them elsewhere.
 
 ## Patterns and diagrams
 
-The robustness patterns the scripts use (promotion guard, split-brain guard, verify after act, decisions read the writer) are explained in
-[docs/patterns/](docs/patterns/README.md). How to rotate the database passwords without losing availability is in [docs/secrets-rotation.md](docs/secrets-rotation.md). The role state machine and the 17-step failover sequence are in
-[docs/diagrams/](docs/diagrams/).
+The [patterns](docs/patterns/README.md) explain the robustness techniques that the scripts use. They cover the promotion guard, the split-brain guard, verify after act, decisions that read the writer, the epoch, the lease and guard, the restartable actor, the witness detector, the negative control and the kill-test harness. [Secrets rotation](docs/secrets-rotation.md) explains how to rotate the database passwords without losing availability. The [diagrams](docs/diagrams/) show the role state machine and the 17-step failover sequence.
 
 ## What is proven
 
-See [capability-register.md](capability-register.md): each capability with its evidence, status (automated, manual, partial) and
-limits, plus the gaps still open. In short: replication, failover and fail-back, RPO and RTO, crash and network faults, secret rotation,
-fencing at start time and live (an epoch and a lease with a guard), a failure detector and an acting controller that survives its own
-kill. Open: the epoch check in every write, loss/jitter/bandwidth faults, and the application layer (Phase 2); the client service
-(Phase 3).
+The [capability register](capability-register.md) lists each capability with its status, result and limit. It also lists the gaps that remain open. In short, the project has proven replication, failover and fail-back, recovery point and recovery time measurements, crash and network faults, secret rotation, backup with point-in-time recovery, and fencing at start time and while running. It has also proven a failure detector and an acting controller that survives its own kill. The open work is the write check on every table, a replicated controller and real packet loss, which belong to Phase 2. The application layer is also Phase 2, and the client service is Phase 3.
 
 ## Design notes
 
-- **Replication slot** (`standby1_slot`): guarantees the primary keeps the WAL the standby still needs, so a
-  temporarily disconnected standby can always catch up. `max_slot_wal_keep_size=1GB` bounds the risk of a dead
-  standby filling the primary's disk (a standby that falls further behind than that must be re-cloned).
-- **`application_name=standby1`**: identifies the standby, and is the name that synchronous replication targets.
-- **`wal_log_hints=on`** and matching WAL settings on the standby: let a promoted standby feed a rebuilt old
-  primary, and allow `pg_rewind` (used by `promote-primary-to-standby.sh`).
-- **Named Docker volumes**: database files live inside Docker, not in this folder, so OneDrive never syncs or
-  locks live database files.
-- **Reset everything**: `docker compose down -v` (deletes both databases).
+- **Replication slot.** The slot `standby1_slot` guarantees that the primary keeps the WAL the standby still needs, so a temporarily disconnected standby can always catch up. The setting `max_slot_wal_keep_size=1GB` bounds the risk of a dead standby filling the primary's disk. A standby that falls further behind than that must be cloned again.
+- **`application_name=standby1`.** It identifies the standby, and it is the name that synchronous replication targets.
+- **`wal_log_hints=on`.** With matching WAL settings on the standby, it lets a promoted standby feed a rebuilt old primary. It also allows `pg_rewind`, which `promote-primary-to-standby.sh` uses.
+- **WAL archive.** The primary copies each completed WAL segment into the `pg-archive` volume. The `pg-backup` volume holds base backups. Both support point-in-time recovery.
+- **Named Docker volumes.** The database files live inside Docker and not in this folder, so no tool that syncs the project folder touches live database files.
+- **Reset everything.** `docker compose down -v` deletes both databases.
 
-## Known limits (deliberate, for later phases)
+## Known limits
 
-- **One controller and one actor**, on one host (a maintenance lock stops two actors there). Replicating them needs a consensus
-  store, which is out of scope. The controller is on the write path through the lease, so an outage longer than the lease time
-  stops the writer (a choice, CTL-01).
-- **The epoch is a file on the host.** A fenced writer is stopped by a guard that must look in time; a process paused while its lease
-  ran out is refused at the write by the lease check (LEASE-04), but that check is opt-in per table, uses the node's own clock and
-  compares lease time, not epochs (GAP-03).
-- **After a failover from synchronous replication the new writer is asynchronous** until the old node has rejoined (the rejoin
-  then switches sync on again, SYNC-01): a window of about the rejoin time with one copy of every write.
-- **No client service yet.** The tests write through `psql` and `pgbench`; there is no router, no reconnecting client with
-  idempotency keys, and no outbox, event stream or idempotent consumers (GAP-12 in Phase 2; the client service in Phase 3).
-- Real packet loss and reordering on the replication link are not tested: TCP hides them from Toxiproxy (GAP-11). Jitter, a bandwidth
-  limit, one-way silence and a dropping link are (NET-04 to NET-07).
-- **Point-in-time recovery** (BAK-01) is one timeline, with the archive on the primary only, a target by LSN, on the same host: no
-  failover between backup and recovery, no off-site copy, no retention policy. Recovery by time is not built.
-- **More than one standby** is not tested: every synchronous result here is for one standby (P1-08, stretch).
+These limits are deliberate and belong to later phases.
+
+- **One controller and one actor.** They run on one host, and a maintenance lock stops two actors there. Replicating them needs a consensus store, which is out of scope. The controller is on the write path through the lease, so an outage longer than the lease time stops the writer. That is a choice (CTL-01).
+- **The epoch is a file on the host.** A guard stops a fenced writer, and the guard must look in time. The lease check (LEASE-04) refuses a write from a process that was paused while its lease ran out. That check is opt-in for each table, it uses the node's own clock, and it compares lease time and not epochs (GAP-03).
+- **A failover from synchronous replication leaves the new writer asynchronous** until the old node has rejoined. The rejoin then switches synchronous replication on again (SYNC-01). The window lasts about as long as the rejoin takes, and every write has one copy only.
+- **There is no client service yet.** The tests write through `psql` and `pgbench`. There is no router, no reconnecting client with idempotency keys, and no outbox, event stream or idempotent consumer. These belong to Phase 2 (GAP-12) and Phase 3.
+- **Real packet loss and reordering are not tested.** TCP, the Transmission Control Protocol, hides them from Toxiproxy (GAP-11). Jitter, a bandwidth limit, one-way silence and a dropping link are tested (NET-04 to NET-07).
+- **Point-in-time recovery covers one timeline** (BAK-01). The archive is on the primary only, the target is an LSN, and everything is on one host. There is no failover between backup and recovery, no off-site copy and no retention policy. Recovery by time is not built.
+- **Only one standby is tested.** Every synchronous result is for one standby (P1-08, a stretch item).
