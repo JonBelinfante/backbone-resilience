@@ -71,6 +71,11 @@ You need Docker with Compose and **Bash 5.0 or later**. macOS ships version 3.2,
 
 ```bash
 cd pg-replication
+cp .env.example .env                       # ports and names only, no passwords
+umask 077                                  # the files below are readable by you only
+printf '%s' "$(openssl rand -hex 16)" > secrets/pg-password.txt
+printf '%s' "$(openssl rand -hex 16)" > secrets/pg-replication-password.txt
+printf '%s' replicator > secrets/pg-replication-user.txt
 docker compose up -d                       # primary on :5433, standby on :5434 (127.0.0.1 only)
 bash scripts/verify-replication.sh         # write on the primary, read on the standby
 bash scripts/run-all-checks.sh             # lint, documents, Python checks, then the 17-step failover and fail-back
@@ -79,7 +84,7 @@ bash scripts/test-auto-failover.sh         # a controller detects, fences and pr
 
 The Bash standard checker is a private plugin. `run-all-checks.sh` reports the lint as SKIP when `BASHCHECK_WRAPPER` is not set, and it still runs every other check. The skip is stated in the last line, so a skipped lint never reads as a full pass. See [pg-replication/README.md](pg-replication/README.md) for the value. Every script accepts `--help`, except two log scripts that need `RUN_LOG_DIR` to be set. That README explains the limit.
 
-The credentials are throwaway values and the ports are bound to loopback. Do not expose them, and never put real secrets in this repository.
+The three secret files are git-ignored, so each clone creates its own. The commands above give each clone its own random values. The credentials are throwaway values and the ports are bound to loopback. Do not expose them, and never put real secrets in this repository.
 
 ## How to read it
 
