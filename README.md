@@ -23,6 +23,8 @@ The library is for platform engineers, database engineers, site reliability engi
 
 | You get | Where |
 |---|---|
+| A **learning path** of seven labs, a **primer** on PostgreSQL replication and a **glossary**. | [docs/learning-path.md](docs/learning-path.md), [docs/primer-postgresql-replication.md](docs/primer-postgresql-replication.md) and [docs/glossary.md](docs/glossary.md) |
+| A **failure-mode index** by fault and a **decision guide** for modes, leases and timeouts. | [docs/failure-modes.md](docs/failure-modes.md) and [docs/decision-guide.md](docs/decision-guide.md) |
 | A **capability catalogue**: each resilience problem, its mechanism, its test, the measured result and the limit. | [docs/capability-catalogue.md](docs/capability-catalogue.md) |
 | A **capability register**: every capability, each with a status, a result and a limit, plus the open gaps. | [pg-replication/capability-register.md](pg-replication/capability-register.md) |
 | An **evidence log**: the commands, numbers and defects found in each run of experiments. | [pg-replication/evidence-log.md](pg-replication/evidence-log.md) |
@@ -58,6 +60,8 @@ Two terms recur below. The recovery point objective (RPO) is the amount of ackno
 | How many acknowledged rows survive when the new writer dies during a rejoin? | All 8, identical on both nodes. | FOV-11 |
 
 ## How it fits together
+
+The [documentation map](docs/README.md) lists every document by purpose.
 
 The [architecture page](docs/architecture.md) draws the containers, the volumes, the proxy, the controller, the lease guard and the archive. The [glossary](docs/glossary.md) defines every term.
 
@@ -97,6 +101,8 @@ CLAUDE.md                  working notes for the coding assistant used on this p
 ```
 
 ## Roadmap and status
+
+A phase is complete when every item in its scope has an automated test and a register row, or is recorded as a named limit. A phase can be part built. Phase 2 is the only one that is.
 
 | Phase | Scope | State |
 |---|---|---|
