@@ -57,6 +57,10 @@ Two terms recur below. The recovery point objective (RPO) is the amount of ackno
 | How much data returns after a mistaken delete that replicated? | All 150 rows, with the same checksum, when the restore stops before the delete. None when it runs to the end of the archive. | BAK-01 |
 | How many acknowledged rows survive when the new writer dies during a rejoin? | All 8, identical on both nodes. | FOV-11 |
 
+## How it fits together
+
+The [architecture page](docs/architecture.md) draws the containers, the volumes, the proxy, the controller, the lease guard and the archive. The [glossary](docs/glossary.md) defines every term.
+
 ## Run it
 
 You need Docker with Compose and **Bash 5.0 or later**. macOS ships version 3.2, so run `brew install bash` first.
