@@ -62,6 +62,7 @@ Each test restores the starting state afterwards, so you can run them in any ord
 - **Test:** `test-replication-modes.sh`: the mode is switched with no restart; asynchronous with the standby stopped; synchronous with it stopped; synchronous with it SIGKILLed during a commit.
 - **Result:** asynchronous commits took **58 ms** with the standby down, and the replication slot kept the WAL for it. A synchronous commit waited with the standby down (still waiting after 5 s) and completed **7.4 s** later when it returned. Killed mid-commit, the commit waited and completed after the restart, and the standby held all 3 acknowledged rows.
 - **Register:** REP-04, REP-05, REP-06.
+- **Clone rebuild:** `test-clone-rebuild.sh` rebuilds the old primary by cloning the writer while the writer names a synchronous standby. The clone carries no sync setting, so the rebuilt node can be promoted without blocking writes (REP-07).
 
 ## 2. Moving the writer safely
 

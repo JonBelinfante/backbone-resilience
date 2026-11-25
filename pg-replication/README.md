@@ -109,6 +109,7 @@ superuser password would otherwise be open to the whole network.
 | `test-lease-handover.sh` | 3-step test: after a failover of an isolated writer the actor gives the new writer a lease at the new epoch and repoints the controller; the lease stays renewed, and when renewals stop the new writer is stopped by its guard |
 | `test-actor-timed-kill.sh` | SIGKILL the actor's whole process group at set delays (0.1 to 0.9 s after it starts, so the kill can land inside the promote script), then run it again; one epoch and a writable standby each time. `--delays LIST`. Crashes the writer: throwaway stack only |
 | `test-controller-kill.sh` | 2-step test: a controller killed and restarted within the lease time costs nothing; one left dead stops the writer when the lease runs out |
+| `test-clone-rebuild.sh` | 4-step test: synchronous replication on and the writer naming a synchronous standby; a failover; the old node is rebuilt by cloning the writer (`--clone`); the rebuilt node streams, names no synchronous standby, and holds identical rows |
 | `test-replication-modes.sh` | 4-step test: a mode switch with no restart; asynchronous with the standby stopped (commits go on, the slot keeps WAL); synchronous with it stopped (a commit waits, then completes); synchronous with the standby SIGKILLed mid-commit (no acknowledged row lost) |
 | `test-guards.sh` | 3-step test: the promotion guard refuses while the primary answers; with the fence lifted, the split-brain guard stops a restarted old primary; a start with one writer and one replica is allowed |
 | `test-rejoin-failure.sh` (`--control`) | 4-step test: the writer crashes, the standby is promoted and takes rows; the rejoin is started and the new writer is killed while the rebuild marker exists; the restore brings back writer and replica with every acknowledged row on both. `--control` runs without the kill |
@@ -146,6 +147,10 @@ Notes:
 Every script run writes one run log, following the Bash standard. Each script appends timestamped
 `INFO`, `WARN` and `ERROR` lines (when it started, each step, decisions, and how it ended) to its own file,
 and a failure records the line, the function and the command that failed.
+
+Known limit: `run-with-log-folder.sh` and `merge-run-logs.sh` read `RUN_LOG_DIR` when they start, so `--help` on them needs
+`RUN_LOG_DIR` set (or the default, which the other scripts supply). Fixing it needs the standard to allow a folder read after the
+library imports; it does not change any result.
 
 | File | Contents |
 |---|---|

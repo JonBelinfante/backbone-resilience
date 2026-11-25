@@ -248,6 +248,7 @@ Change: `lib/mode.sh` records the wanted mode (`set-replication-mode.sh` writes 
 | `test-guards.sh` | 3 runs: passed, failed, passed. The failed run exposed the fence regression below; the last two runs passed (FOV-02, FOV-03) |
 | `test-rejoin-failure.sh` | 2 kill runs and 1 control, passed (FOV-11). The first kill run failed on the restore defect below and passed after the fix |
 | `test-point-in-time.sh` | 2 runs, passed both times (BAK-01) |
+| `test-clone-rebuild.sh` | 2 runs, passed both times (REP-07, clone path). The first run did not reproduce the condition (the source named no sync standby), so the test now switches the new writer to sync before the clone and asserts that the source has the setting |
 | `check-hygiene.sh` | passed on the repository; its control (a copy with a bad call, a bad port and a committed key) failed all three checks. The control found a defect in the check itself (below) |
 | `check-run-timeline.sh` | passed; its control (lines reversed) failed the ordering check |
 | `run-all-checks.sh` | passed after the fence fix: lint (74 files), docs, python, hygiene, timeline, round trip |
