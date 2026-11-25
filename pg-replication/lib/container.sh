@@ -75,7 +75,8 @@ container::network() {
 # Print the name of the Docker volume mounted in the container (each node has exactly one).
 container::volume() {
   local container="${1:?container required}"
-  local template='{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}{{end}}{{end}}'
+  local template='{{range .Mounts}}{{if and (eq .Type "volume")'
+  template+=' (eq .Destination "/var/lib/postgresql/data")}}{{.Name}}{{end}}{{end}}'
 
   container::inspect "${container}" "${template}"
 }

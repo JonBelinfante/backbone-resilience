@@ -23,11 +23,17 @@ services:
       - wal_log_hints=on             # allows pg_rewind of an old primary later
       - -c
       - hot_standby_feedback=on
+      - -c
+      - archive_mode=on              # completed WAL segments are copied out for point-in-time recovery
+      - -c
+      - archive_command=test ! -f /archive/%f && cp %p /archive/%f
     ports:
       - "127.0.0.1:${PG_PRIMARY_PORT}:${PG_CONTAINER_PORT}"
     networks: [pgnet]
     volumes:
       - primary-data:/var/lib/postgresql/data
+      - pg-archive:/archive              # WAL archive (point-in-time recovery, see scripts/test-point-in-time.sh)
+      - pg-backup:/backup                # base backups taken from the primary
       - ./primary/init-replication.sh:/docker-entrypoint-initdb.d/10-init-replication.sh:ro
     secrets:
       - pg-password
@@ -124,6 +130,8 @@ networks:
 volumes:
   primary-data:
   standby-data:
+  pg-archive:
+  pg-backup:
 
 # Passwords are files, mounted read-only under /run/secrets/ (see secrets/README.txt); they are never in this file,
 # in .env or in the containers' environment.

@@ -32,9 +32,9 @@ anyone who wants a worked example of turning an availability claim into a test.
 | You get | Where |
 |---|---|
 | A **capability catalogue**: each resilience problem, its mechanism, the test, the measured result and the limit | [docs/capability-catalogue.md](docs/capability-catalogue.md) |
-| A **capability register**: 59 capabilities, each with status, evidence and limits, plus the open gaps | [pg-replication/capability-register.md](pg-replication/capability-register.md) |
+| A **capability register**: 61 capabilities, each with status, evidence and limits, plus the open gaps | [pg-replication/capability-register.md](pg-replication/capability-register.md) |
 | An **evidence log**: the commands, numbers and defects found in each run of experiments | [pg-replication/evidence-log.md](pg-replication/evidence-log.md) |
-| **Runnable tests and experiments** (23 test scripts and a measurement runner), each restoring the starting state | [pg-replication/](pg-replication/README.md) |
+| **Runnable tests and experiments** (27 test scripts and a measurement runner), each restoring the starting state | [pg-replication/](pg-replication/README.md) |
 | **RPO and RTO measurements** with a report | [pg-replication/docs/recovery-report.md](pg-replication/docs/recovery-report.md) |
 | **Robustness patterns** (guards, verify-after-act, decisions read the writer) and diagrams | [pg-replication/docs/patterns/](pg-replication/docs/patterns/README.md) |
 | A **secret rotation guide** with no failed writes | [pg-replication/docs/secrets-rotation.md](pg-replication/docs/secrets-rotation.md) |
@@ -60,6 +60,8 @@ All on one laptop (Docker Compose, PostgreSQL 16, two nodes). They show behaviou
 | A link that drops every connection after 256 KB | replication stalls completely: each reconnect restarts at the segment start | NET-07 |
 | Failed writes while rotating database passwords | 0 | SEC-R3 |
 | Acknowledged writes lost across crash, mid-transaction kill and checkpoint kill | 0 | CRS-01 |
+| Rows recovered after a mistaken delete that replicated (restore to the position before it) | 150 of 150, same checksum; 0 when restoring to the end of the archive | BAK-01 |
+| Acknowledged rows on both nodes after the new writer dies during a rejoin | 8 of 8, identical | FOV-11 |
 
 ## Run it
 
@@ -99,7 +101,7 @@ CLAUDE.md                  working notes for the AI coding assistant used on thi
 
 | Phase | Scope | State |
 |---|---|---|
-| 1 | The Postgres pair: replication, failover and fail-back, RPO/RTO, crash and network faults, secret rotation | Complete |
+| 1 | The Postgres pair: replication, failover and fail-back, RPO/RTO, crash and network faults, secret rotation, guards, a second failure during a rejoin, backup and point-in-time recovery | Complete: every item automated |
 | 2 | Failover safety (detector, fencing epoch, actor, leases) and the application layer (outbox, idempotent consumers, invariant checker) | Failover safety built, proven and documented as patterns (11 pages); application layer not started |
 | 3 | Service layer: a load generator and clients that retry through a failover; RTO under load; rotation for application clients | Not started |
 | 4 | Hot-hot with partitioned ownership | Not started |
@@ -114,6 +116,8 @@ compose file are throwaway values for local experiments only.
 ## Honest limits
 
 - A single machine and a single Docker host: no real network, no second site, no power-loss tests.
+- Point-in-time recovery covers one timeline, with the archive on the primary and no off-site copy; it is by position, not time.
+- Every synchronous result is for one standby; quorum is not tested.
 - One controller and one actor, with a host-local lock. Replicating them needs a consensus store.
 - The tests write through `psql` and `pgbench`. There is no payments service yet, so end-to-end consistency (no lost or duplicated
   payment) is **not** shown; that is Phase 2 and 3.

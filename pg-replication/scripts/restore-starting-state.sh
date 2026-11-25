@@ -27,6 +27,8 @@ readonly SCRIPT_NAME="${0##*/}"
 readonly SCRIPT_DIR="${0%"${SCRIPT_NAME}"}"
 readonly STREAM_ATTEMPTS=30
 readonly STREAM_PAUSE_SECONDS=2
+readonly RESTORE_TIMELINE_READ="pg_controldata \"\$1\""
+readonly RESTORE_TIMELINE_PARSE="sed -n 's/^Latest checkpoint.s TimeLineID: *//p'"
 
 # shellcheck source=./runtime.sh
 source "${SCRIPT_DIR}runtime.sh"
@@ -38,6 +40,8 @@ source "${SCRIPT_DIR}../lib/database.sh"
 source "${SCRIPT_DIR}../lib/lock.sh"
 # shellcheck source=../lib/mode.sh
 source "${SCRIPT_DIR}../lib/mode.sh"
+# shellcheck source=../lib/fence.sh
+source "${SCRIPT_DIR}../lib/fence.sh"
 
 # Print how to run this script.
 usage() {
@@ -168,6 +172,65 @@ fail_back() {
   run_with_roles "${STANDBY_CONTAINER}" "${PRIMARY_CONTAINER}" promote-primary-to-standby.sh
 }
 
+# Print the timeline a stopped node's data directory is on, or 0 if it cannot be read (a rebuild
+# that was killed part way can leave a directory that pg_controldata does not read).
+# Usage: timeline_of NODE
+timeline_of() {
+  local node="${1:?node required}"
+  local program="${RESTORE_TIMELINE_READ} | ${RESTORE_TIMELINE_PARSE}"
+  local timeline
+
+  if timeline="$(fence::in_volume "${node}" "${program}")"; then
+    printf '%s\n' "${timeline:-0}"
+  else
+    printf '0\n'
+  fi
+}
+
+# Print the node to start as the writer when both are stopped: the one without the replica
+# marker (standby.signal). If both or neither have it, the one on the newer timeline wins, and
+# a tie goes to the primary.
+writer_candidate() {
+  local primary_fenced
+  local standby_fenced
+  local primary_timeline
+  local standby_timeline
+
+  primary_fenced="$(fence::is_applied "${PRIMARY_CONTAINER}")"
+  standby_fenced="$(fence::is_applied "${STANDBY_CONTAINER}")"
+  if [[ "${primary_fenced}" != "${standby_fenced}" ]]; then
+    if [[ "${primary_fenced}" == 'no' ]]; then
+      printf '%s\n' "${PRIMARY_CONTAINER}"
+    else
+      printf '%s\n' "${STANDBY_CONTAINER}"
+    fi
+    return 0
+  fi
+  primary_timeline="$(timeline_of "${PRIMARY_CONTAINER}")"
+  standby_timeline="$(timeline_of "${STANDBY_CONTAINER}")"
+  if (( standby_timeline > primary_timeline )); then
+    printf '%s\n' "${STANDBY_CONTAINER}"
+  else
+    printf '%s\n' "${PRIMARY_CONTAINER}"
+  fi
+}
+
+# Both nodes are stopped (a second failure, for example during a rejoin): start the node most
+# likely to hold the latest writes as the writer. The roles are then restored from there.
+start_writer_candidate() {
+  local candidate
+  local database
+
+  candidate="$(writer_candidate)"
+  if [[ "${candidate}" == "${PRIMARY_CONTAINER}" ]]; then
+    database=primary
+  else
+    database=standby
+  fi
+  log INFO "DECISION: both nodes are stopped: starting ${candidate} as the writer"
+  bash "${SCRIPT_DIR}bring-up-database.sh" --database "${database}"
+}
+
 # Read the roles of both nodes and bring them back to writer and replica.
 restore_starting_state() {
   local primary_role
@@ -192,6 +255,10 @@ restore_starting_state() {
       ;;
     stopped/writer | replica/stopped)
       fail_back "${primary_role}"
+      ;;
+    stopped/stopped)
+      start_writer_candidate
+      restore_starting_state
       ;;
     replica/writer)
       log INFO 'DECISION: the primary is a replica of unknown history: rebuilding it first'

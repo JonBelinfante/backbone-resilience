@@ -21,8 +21,9 @@ Each test restores the starting state afterwards, so you can run them in any ord
 5. [Measuring loss and downtime](#5-measuring-loss-and-downtime)
 6. [Surviving crashes, load and network faults](#6-surviving-crashes-load-and-network-faults)
 7. [Safe decisions and safe secrets](#7-safe-decisions-and-safe-secrets)
-8. [Engineering practice that makes the proof trustworthy](#8-engineering-practice-that-makes-the-proof-trustworthy)
-9. [What this catalogue does not cover](#9-what-this-catalogue-does-not-cover)
+8. [Backup and point-in-time recovery](#8-backup-and-point-in-time-recovery)
+9. [Engineering practice that makes the proof trustworthy](#9-engineering-practice-that-makes-the-proof-trustworthy)
+10. [What this catalogue does not cover](#10-what-this-catalogue-does-not-cover)
 
 ---
 
@@ -56,6 +57,12 @@ Each test restores the starting state afterwards, so you can run them in any ord
 
 ---
 
+### 1.4 The modes, with the standby down and killed
+- **Problem:** a standby that is stopped or killed must not cost the writer more than the mode promised.
+- **Test:** `test-replication-modes.sh`: the mode is switched with no restart; asynchronous with the standby stopped; synchronous with it stopped; synchronous with it SIGKILLed during a commit.
+- **Result:** asynchronous commits took **58 ms** with the standby down, and the replication slot kept the WAL for it. A synchronous commit waited with the standby down (still waiting after 5 s) and completed **7.4 s** later when it returned. Killed mid-commit, the commit waited and completed after the restart, and the standby held all 3 acknowledged rows.
+- **Register:** REP-04, REP-05, REP-06.
+
 ## 2. Moving the writer safely
 
 ### 2.1 Manual failover and fail-back
@@ -71,6 +78,7 @@ Each test restores the starting state afterwards, so you can run them in any ord
 - **Mechanism:** a promotion guard (refuses while the old primary is reachable) and a split-brain guard (stops a restarted old
   primary when the other node is already writable).
 - **Result:** the promotion exits 1 with "split-brain"; the restarted old primary is stopped again.
+- **Result (automated):** `test-guards.sh`. With the primary answering, the promotion was refused and the standby stayed a replica. A restarted old primary was stopped again by the start script, once its fence was lifted (promotion fences it first, see 3.1).
 - **Limit:** script checks, not real fencing; see section 3 for the fence.
 - **Patterns:** [promotion guard](../pg-replication/docs/patterns/promotion-guard.md), [split-brain guard](../pg-replication/docs/patterns/split-brain-guard.md), [verify after act](../pg-replication/docs/patterns/verify-after-act.md).
 - **Register:** FOV-02, FOV-03.
@@ -93,6 +101,12 @@ Each test restores the starting state afterwards, so you can run them in any ord
 - **Register:** FOV-07, FOV-08, OPS-01.
 
 ---
+
+### 2.5 A second failure during a rejoin
+- **Problem:** the writer dies while the old node is being rebuilt as a standby. Both nodes are down, and one of them has a half-changed data directory.
+- **Test:** `test-rejoin-failure.sh`: the new writer is killed once the rebuild marker appears; the restore must bring the stack back with every acknowledged row on both nodes. A `--control` run has no kill and shows the marker is what the kill leaves behind.
+- **Result:** the restore first refused, with both nodes stopped. It now starts the writer candidate (the node without the replica marker, else the newer timeline read from the stopped volume), then restores from there. After the fix, **8 of 8 acknowledged rows** were on both nodes, with equal checksums.
+- **Register:** FOV-11.
 
 ## 3. Fencing: never two writers
 
@@ -278,7 +292,19 @@ Run `measure-recovery.sh` (about 13 minutes); it writes [recovery-report.md](../
 
 ---
 
-## 8. Engineering practice that makes the proof trustworthy
+## 8. Backup and point-in-time recovery
+
+Replication copies a mistake as faithfully as it copies data. Only a backup with the archived log can undo one.
+
+### 8.1 A mistaken delete is undone from a base backup and the archive
+- **Problem:** every row is deleted by mistake on the primary. The standby loses them within seconds.
+- **Mechanism:** the primary archives completed WAL segments (`archive_command`). A base backup is taken with `pg_basebackup -X stream`. A copy is restored into a separate container, to a recorded WAL position (LSN) before the delete, and promoted there.
+- **Test:** `test-point-in-time.sh` (5 steps, with a control).
+- **Result:** the delete reached the standby within 2 s. The restore to the recorded LSN gave **150 rows and the checksum from before the delete**. The control, recovery to the end of the archive, gave **0 rows**: the position is what makes the difference.
+- **Limit:** one timeline (a failover between the backup and the recovery is not tested); a target by position, not time; a separate copy, not an in-place repair; the archive and the backup are volumes on the same host, with no off-site copy and no retention policy.
+- **Register:** BAK-01.
+
+## 9. Engineering practice that makes the proof trustworthy
 
 - **Every claim is re-runnable.** The register's status says Proven (auto), Proven (manual), Partial or Not proven. Nothing is
   claimed that has not been run.
@@ -289,13 +315,18 @@ Run `measure-recovery.sh` (about 13 minutes); it writes [recovery-report.md](../
 - **House standards, checked by tools.** Shell scripts follow a deterministic Bash standard (`lint-scripts.sh`); Python follows its
   own (ruff, mypy strict, pytest in a pinned container, no waivers). `run-all-checks.sh` runs lint, documents, Python and the round trip.
 - **An audit trail.** Every script writes a millisecond UTC run log; `run-with-log-folder.sh --merge` merges a whole run into one timeline.
-- **One place for each kind of call.** All docker calls live in `lib/container.sh` and all database calls in `lib/database.sh`.
+- **Hygiene and timeline checks.** `check-hygiene.sh` checks that host scripts make no direct `docker`, `psql` or `pgbench` calls, that every published port is on loopback, and that no tracked file holds a private key or token. `check-run-timeline.sh` checks that a merged run timeline is ordered and well formed. Both run in `run-all-checks.sh`, and both were shown to fail on a bad copy (ENG-02, ENG-03, OBS-02).
+- **Each test that found a defect says so.** Found this session: a restore that refused a double stop, a fence that picked up every volume once a node had several, and a hygiene check that read a failed command as "no match".
+- **One place for each kind of call.** Database calls live in `lib/database.sh`, and most `docker` calls in `lib/container.sh`. The libraries for a job (`fence.sh`, `lease.sh`, `backup.sh`, `access.sh`) run `docker` themselves, as CLAUDE.md records.
 
 ---
 
-## 9. What this catalogue does not cover
+## 10. What this catalogue does not cover
 
 Open and deliberately out of scope for now (details in the register, section 4):
+
+- **Point-in-time recovery across a failover, an off-site archive, a retention policy, and recovery by time** (BAK-01 limits).
+- **More than one standby** (a quorum of synchronous standbys) (P1-08, not tested).
 
 - **The write check on every table, a clock step, and a comparison of epochs between nodes** (GAP-03). The check exists (3.3) but is opt-in per table.
 - **A replicated controller** (needs a consensus store) (GAP-07).

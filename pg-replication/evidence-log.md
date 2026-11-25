@@ -240,3 +240,25 @@ Change: `lib/mode.sh` records the wanted mode (`set-replication-mode.sh` writes 
 
 **Bash standard.** The plugin now reports standard version 8; the scripts conform.
 
+## Evidence log, 2026-11-25 (Phase 1 remainder: P1-01 to P1-07)
+
+| Run | Result |
+|---|---|
+| `test-replication-modes.sh` | 2 runs, passed both times (REP-04, REP-05, REP-06, and the standby killed mid-commit under sync) |
+| `test-guards.sh` | 3 runs: passed, failed, passed. The failed run exposed the fence regression below; the last two runs passed (FOV-02, FOV-03) |
+| `test-rejoin-failure.sh` | 2 kill runs and 1 control, passed (FOV-11). The first kill run failed on the restore defect below and passed after the fix |
+| `test-point-in-time.sh` | 2 runs, passed both times (BAK-01) |
+| `check-hygiene.sh` | passed on the repository; its control (a copy with a bad call, a bad port and a committed key) failed all three checks. The control found a defect in the check itself (below) |
+| `check-run-timeline.sh` | passed; its control (lines reversed) failed the ordering check |
+| `run-all-checks.sh` | passed after the fence fix: lint (74 files), docs, python, hygiene, timeline, round trip |
+| `test-fencing.sh`, `test-hard-kill.sh --target restore` | passed after the restore changes (8 of 8 kills recovered) |
+
+**Defects found and fixed this session.**
+1. **Restore with both nodes stopped.** After a second failure the restore stopped with "cannot restore from roles stopped/stopped: repair by hand". `restore-starting-state.sh` now starts the writer candidate: the node without the replica marker (`standby.signal`); if both or neither have it, the node on the newer timeline (read with `pg_controldata` from the stopped volume through `fence::in_volume`); a tie goes to the primary. The restore then runs again from the resulting roles. Verified by the rejoin kill run (8 of 8 rows on both nodes afterwards) and the hard-kill restore test.
+2. **Fence and clone found the wrong volume once a node had several volumes.** Adding the archive and backup volumes to the primary made `container::volume` return all volume names joined, and the fence path became `/archive/backup/var/lib/postgresql/data`. The failure showed in the repeat run of `test-guards.sh` (the promotion fenced the old primary). Fixed: `container::volume` returns the volume mounted at `/var/lib/postgresql/data`, and `fence::in_volume` uses that path. Covered again by `test-guards.sh`, `test-fencing.sh`, `test-rejoin-failure.sh` and the round trip.
+3. **The hygiene check passed a pattern it could not read.** A pattern beginning with a dash was taken by `git grep` as an option; the command failed, and the `if` read the failure as "no match". The control found it. Fixed by passing the pattern with `-e`. Limit that remains: any `git grep` error still reads as "no match".
+
+**Restore defect, earlier in the session (not a Phase 1 item but found by the same work).** An interrupted rejoin left pg-primary's rebuild marker; the cleanup failed to restore, and a second run then found the standby not streaming. Recorded under the rejoin work; the restore now also rebuilds a stopped standby that does not stream, and waits until the standby has replayed the writer's position.
+
+**What the new tests do not show.** Replication modes: one standby only. Rejoin failure: one kill point, while the rebuild marker exists. Point-in-time recovery: one timeline (no failover between the backup and the recovery), the archive on the primary only, the target by LSN, and no off-site copy. The guards: the split-brain guard acts only when the start-time fence has been lifted; the fence is the first line (FOV-10).
+

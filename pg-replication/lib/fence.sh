@@ -6,8 +6,6 @@
 # Exit codes: none (the functions return, or call die of the script that imported them)
 
 readonly FENCE_MARKER='standby.signal'
-readonly FENCE_MOUNT_RANGE='{{range .Mounts}}{{if eq .Type "volume"}}'
-readonly FENCE_MOUNT_TEMPLATE="${FENCE_MOUNT_RANGE}{{.Destination}}{{end}}{{end}}"
 
 # Run a short shell program in a throwaway container that mounts the node's data volume. The node
 # may be running or stopped; the program sees the data directory as its first argument.
@@ -17,11 +15,10 @@ fence::in_volume() {
   local program="${2:?program required}"
   local image
   local volume
-  local data_dir
+  local data_dir='/var/lib/postgresql/data'
 
   image="$(container::image "${node}")"
   volume="$(container::volume "${node}")"
-  data_dir="$(container::inspect "${node}" "${FENCE_MOUNT_TEMPLATE}")"
   docker run \
     --rm \
     --user postgres \
