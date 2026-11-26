@@ -1,5 +1,22 @@
 # Rotating database secrets without losing availability
 
+<!-- toc -->
+
+- [1. The secrets in this stack](#1-the-secrets-in-this-stack)
+- [2. One password, many copies](#2-one-password-many-copies)
+- [3. Principles](#3-principles)
+- [4. Method A: rotate in place, with the same role name](#4-method-a-rotate-in-place-with-the-same-role-name)
+- [5. Method B: overlap with a second identity, with no window](#5-method-b-overlap-with-a-second-identity-with-no-window)
+  - [Which method to use](#which-method-to-use)
+- [6. Rotating the superuser password](#6-rotating-the-superuser-password)
+- [7. What is special about two databases](#7-what-is-special-about-two-databases)
+- [8. Runbook for Method B and the replication password](#8-runbook-for-method-b-and-the-replication-password)
+- [9. Evidence](#9-evidence)
+- [10. What is not solved yet](#10-what-is-not-solved-yet)
+- [Related](#related)
+
+<!-- tocstop -->
+
 **The question this page answers:** how do you change the passwords of a two-database system, with a writer and a standby, while it keeps accepting writes, keeps replicating and loses no data? And how do you know that the change worked?
 
 **The short answer:** never swap a password. Make the old and the new password valid at the same time. Move every user of the secret across, and prove that the new password works. Only then retire the old one. The rest of this page explains what that means for two PostgreSQL nodes. It includes measurements from this repository's stack, taken on 2026-11-20.

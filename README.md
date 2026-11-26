@@ -1,5 +1,21 @@
 # Resilience: evidence for how a database platform survives failure
 
+<!-- toc -->
+
+- [Why it is useful](#why-it-is-useful)
+- [Who it is for](#who-it-is-for)
+- [What you get](#what-you-get)
+- [What was measured](#what-was-measured)
+- [How it fits together](#how-it-fits-together)
+- [Run it](#run-it)
+- [How to read it](#how-to-read-it)
+- [Repository map](#repository-map)
+- [Roadmap and status](#roadmap-and-status)
+- [Licence](#licence)
+- [Honest limits](#honest-limits)
+
+<!-- tocstop -->
+
 This repository is a hands-on library. It shows, with repeatable tests and measured numbers, how a pair of PostgreSQL databases stays available. It also measures when acknowledged data is lost and when it is not, as nodes, networks and the failover machinery itself fail.
 
 It is **not an application**. It is a working laboratory. Each mechanism that a resilient database platform needs is built, broken on purpose and measured. Those mechanisms are replication, failover, fencing, failure detection, lease-based write protection, crash recovery, backup and secret rotation. Each one comes with a test that you can run, a control that proves the test can see the fault, and a plain statement of its limits.

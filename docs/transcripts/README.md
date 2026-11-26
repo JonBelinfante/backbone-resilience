@@ -1,5 +1,10 @@
 # Sample transcripts
 
+<!-- toc -->
+
+
+<!-- tocstop -->
+
 These pages show the real output of four tests, so that you can see what a run looks like before you start the stack. Each page names the date and the commit of the run. A later change to a test can make a transcript out of date, so rerun the test to see the current output. The terms are in the [glossary](../glossary.md).
 
 | Transcript | Register rows | Time |

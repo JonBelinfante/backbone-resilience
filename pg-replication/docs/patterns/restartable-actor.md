@@ -1,5 +1,16 @@
 # Restartable actor
 
+<!-- toc -->
+
+- [Problem](#problem)
+- [Mechanism](#mechanism)
+- [Guards against](#guards-against)
+- [Evidence](#evidence)
+- [Limits](#limits)
+- [Related](#related)
+
+<!-- tocstop -->
+
 **Pattern:** break an action into ordered steps and record intent before the first step. Make every step safe to repeat. Then a re-run finishes what a crash left half done.
 
 ## Problem

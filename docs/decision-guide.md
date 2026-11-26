@@ -1,5 +1,16 @@
 # Decision guide
 
+<!-- toc -->
+
+- [1. Which replication mode](#1-which-replication-mode)
+- [2. How long should the lease be](#2-how-long-should-the-lease-be)
+- [3. Which timeouts](#3-which-timeouts)
+- [4. Backup or replication](#4-backup-or-replication)
+- [5. A standby that is down for a long time](#5-a-standby-that-is-down-for-a-long-time)
+- [What this guide does not cover](#what-this-guide-does-not-cover)
+
+<!-- tocstop -->
+
 This guide turns the measurements into choices. It answers four questions. Which replication mode should I use? How long should the lease be? Which timeouts should I set? When is backup the answer and replication is not?
 
 Every number comes from a run on one machine with two PostgreSQL 16 nodes. A real network, a larger database and a higher write rate will change them. Use the numbers to see which way each choice pushes, and measure your own system before you adopt a value. The register row after each statement holds the evidence and its limits.

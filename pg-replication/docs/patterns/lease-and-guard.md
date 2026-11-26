@@ -1,5 +1,16 @@
 # Lease and guard
 
+<!-- toc -->
+
+- [Problem](#problem)
+- [Mechanism](#mechanism)
+- [Guards against](#guards-against)
+- [Evidence](#evidence)
+- [Limits](#limits)
+- [Related](#related)
+
+<!-- tocstop -->
+
 **Pattern:** a writer may take writes only while it holds a lease that something else keeps renewing. A guard beside the writer stops it when the lease runs out.
 
 ## Problem

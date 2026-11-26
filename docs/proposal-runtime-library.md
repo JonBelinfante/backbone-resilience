@@ -1,5 +1,19 @@
 # Proposal: one runtime library for the Bash standard
 
+<!-- toc -->
+
+- [Problem](#problem)
+- [What a library cannot do today](#what-a-library-cannot-do-today)
+- [Proposed change](#proposed-change)
+- [Draft of the library](#draft-of-the-library)
+- [Evidence from the prototype](#evidence-from-the-prototype)
+- [Decisions](#decisions)
+- [Remaining notes for the standard's author](#remaining-notes-for-the-standards-author)
+- [Migration plan, once the standard accepts the change](#migration-plan-once-the-standard-accepts-the-change)
+- [Outcome (2026-11-15)](#outcome-2026-11-15)
+
+<!-- tocstop -->
+
 **For:** the author of the bash-standard plugin.
 
 **Status:** The plugin accepted the proposal in bash-standard 0.5.0, which is standard version 6, on 2026-11-15. The differences are noted below, and the proposal has been applied to the host scripts. This page is kept for the reasoning and the prototype evidence.

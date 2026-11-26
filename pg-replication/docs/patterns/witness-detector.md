@@ -1,5 +1,16 @@
 # Witness detector
 
+<!-- toc -->
+
+- [Problem](#problem)
+- [Mechanism](#mechanism)
+- [Guards against](#guards-against)
+- [Evidence](#evidence)
+- [Limits](#limits)
+- [Related](#related)
+
+<!-- tocstop -->
+
 **Pattern:** declare a node dead only when two independent observers agree. Say "cannot tell" when one observer cannot see, and do not guess.
 
 ## Problem

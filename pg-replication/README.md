@@ -1,5 +1,27 @@
 # The PostgreSQL pair: replication, failover safety and recovery
 
+<!-- toc -->
+
+- [Where this sits in the roadmap](#where-this-sits-in-the-roadmap)
+- [Requirements](#requirements)
+- [Run](#run)
+- [Things to try](#things-to-try)
+- [Scripts and libraries](#scripts-and-libraries)
+  - [Everyday scripts](#everyday-scripts)
+  - [Libraries](#libraries)
+  - [Tests of replication, failover and recovery](#tests-of-replication-failover-and-recovery)
+  - [Tests of detection, the actor and fencing](#tests-of-detection-the-actor-and-fencing)
+  - [Tests of faults, load and secrets, and the measurement runners](#tests-of-faults-load-and-secrets-and-the-measurement-runners)
+  - [Checks and tools](#checks-and-tools)
+- [Notes](#notes)
+- [Logs and audit trail](#logs-and-audit-trail)
+- [Patterns and diagrams](#patterns-and-diagrams)
+- [What is proven](#what-is-proven)
+- [Design notes](#design-notes)
+- [Known limits](#known-limits)
+
+<!-- tocstop -->
+
 New here? Start with the [repository README](../README.md) and the [capability catalogue](../docs/capability-catalogue.md). This file is the working reference for the scripts and libraries.
 
 ## Where this sits in the roadmap

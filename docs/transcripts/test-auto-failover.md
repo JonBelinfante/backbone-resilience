@@ -1,5 +1,13 @@
 # Transcript: Automatic failover
 
+<!-- toc -->
+
+- [What to look for](#what-to-look-for)
+- [Limit](#limit)
+- [Output](#output)
+
+<!-- tocstop -->
+
 **Test:** [test-auto-failover.sh](../../pg-replication/scripts/test-auto-failover.sh)  
 **Register rows:** ACT-01, DET-01  
 **Run:** 2026-11-25, at commit 6becac0, on one machine. It took about 62 seconds.  

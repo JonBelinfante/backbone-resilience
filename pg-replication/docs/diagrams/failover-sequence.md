@@ -1,5 +1,12 @@
 # Failover sequence: the 17-step round trip
 
+<!-- toc -->
+
+- [What each check proves](#what-each-check-proves)
+- [Known weak points, in the order that a learner should meet them](#known-weak-points-in-the-order-that-a-learner-should-meet-them)
+
+<!-- tocstop -->
+
 The script [test-failover-roundtrip.sh](../../scripts/test-failover-roundtrip.sh) runs the full cycle. It replicates a row, fails over, rejoins the old primary, writes while a node is down, and compares the two nodes. The diagram shows the calls and the check at each step. The step numbers match the test's own output.
 
 The container names `pg-primary` and `pg-standby` never change. After a failover, `pg-standby` is the writer. Step 12 stops the container named `pg-primary`, which is then the **replica**. The roles swap, and the names do not.

@@ -1,5 +1,16 @@
 # Kill-test harness
 
+<!-- toc -->
+
+- [Problem](#problem)
+- [Mechanism](#mechanism)
+- [Guards against](#guards-against)
+- [Evidence](#evidence)
+- [Limits](#limits)
+- [Related](#related)
+
+<!-- tocstop -->
+
 **Pattern:** kill a script, or a whole process group, with SIGKILL at set delays. Then require that a re-run or a restore returns the platform to a correct state. SIGKILL is the signal that stops a process at once.
 
 ## Problem

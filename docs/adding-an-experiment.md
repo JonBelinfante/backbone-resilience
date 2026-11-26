@@ -1,5 +1,14 @@
 # Adding an experiment
 
+<!-- toc -->
+
+- [The template](#the-template)
+- [The steps](#the-steps)
+- [Lessons from this repository](#lessons-from-this-repository)
+- [Check and record](#check-and-record)
+
+<!-- tocstop -->
+
 An experiment is a test that injects one fault and checks one claim. This guide sets out the template and the steps. Use [test-divergence-rewind.sh](../pg-replication/scripts/test-divergence-rewind.sh) as the worked example. The terms are in the [glossary](glossary.md).
 
 ## The template

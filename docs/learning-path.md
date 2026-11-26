@@ -1,5 +1,20 @@
 # Learning path
 
+<!-- toc -->
+
+- [Before you start](#before-you-start)
+- [How each lab works](#how-each-lab-works)
+- [Lab 1: replication works](#lab-1-replication-works)
+- [Lab 2: the price of synchronous replication](#lab-2-the-price-of-synchronous-replication)
+- [Lab 3: what a failover can lose](#lab-3-what-a-failover-can-lose)
+- [Lab 4: a decision on a stale replica](#lab-4-a-decision-on-a-stale-replica)
+- [Lab 5: stopping a writer that cannot be killed](#lab-5-stopping-a-writer-that-cannot-be-killed)
+- [Lab 6: automatic failover](#lab-6-automatic-failover)
+- [Lab 7: undoing a mistake that replication copied](#lab-7-undoing-a-mistake-that-replication-copied)
+- [What to read next](#what-to-read-next)
+
+<!-- tocstop -->
+
 This path takes you through seven labs. Each lab runs one test and teaches one idea. Do them in order, because each lab uses the ideas of the one before. The tests take about 6 minutes to run, plus the time that you spend predicting and reading.
 
 ## Before you start

@@ -1,5 +1,16 @@
 # Verify after act
 
+<!-- toc -->
+
+- [Problem](#problem)
+- [Mechanism](#mechanism)
+- [Guards against](#guards-against)
+- [Evidence](#evidence)
+- [Limits](#limits)
+- [Related](#related)
+
+<!-- tocstop -->
+
 **Pattern:** after an action reports success, read the state back and check that it is what the action should have produced.
 
 ## Problem

@@ -1,5 +1,13 @@
 # Transcript: A true divergence is rewound
 
+<!-- toc -->
+
+- [What to look for](#what-to-look-for)
+- [Limit](#limit)
+- [Output](#output)
+
+<!-- tocstop -->
+
 **Test:** [test-divergence-rewind.sh](../../pg-replication/scripts/test-divergence-rewind.sh)  
 **Register rows:** FOV-09  
 **Run:** 2026-11-25, at commit 6becac0, on one machine. It took about 26 seconds.  

@@ -1,5 +1,16 @@
 # Negative control
 
+<!-- toc -->
+
+- [Problem](#problem)
+- [Mechanism](#mechanism)
+- [Guards against](#guards-against)
+- [Evidence](#evidence)
+- [Limits](#limits)
+- [Related](#related)
+
+<!-- tocstop -->
+
 **Pattern:** for every test that proves a protection works, run the same test with the protection removed. Require that second run to fail.
 
 ## Problem

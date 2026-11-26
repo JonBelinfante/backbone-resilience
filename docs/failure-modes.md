@@ -1,5 +1,17 @@
 # Failure modes
 
+<!-- toc -->
+
+- [How to read a row](#how-to-read-a-row)
+- [1. A node stops or crashes](#1-a-node-stops-or-crashes)
+- [2. Two writers](#2-two-writers)
+- [3. The failover machinery fails](#3-the-failover-machinery-fails)
+- [4. The network misbehaves](#4-the-network-misbehaves)
+- [5. Data and operations](#5-data-and-operations)
+- [Faults with no test](#faults-with-no-test)
+
+<!-- tocstop -->
+
 This page indexes the repository by fault. Each row names a fault, what it does, how the platform notices and handles it, the register row that holds the evidence, and the risk that remains. It lists only faults that a test in this repository exercises. The last section names the faults that no test covers.
 
 The page is the first draft of a risk register. It does not give a likelihood or an owner for any risk. The [glossary](glossary.md) defines the terms, and the [capability register](../pg-replication/capability-register.md) holds the numbers and the limits. The few numbers here are quoted from the register, which stays the source.

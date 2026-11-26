@@ -1,5 +1,16 @@
 # Decisions read the writer
 
+<!-- toc -->
+
+- [Problem](#problem)
+- [Mechanism](#mechanism)
+- [Guards against](#guards-against)
+- [Evidence](#evidence)
+- [Limits](#limits)
+- [Related](#related)
+
+<!-- tocstop -->
+
 **Pattern:** a decision, such as an approval, a decline, a price or a limit, reads only a node that accepts writes. A replica may be read for reports and searches, but never for a decision, because it may lag.
 
 ## Problem

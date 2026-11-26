@@ -1,5 +1,14 @@
 # Robustness patterns
 
+<!-- toc -->
+
+- [Pages](#pages)
+- [Related guide](#related-guide)
+- [Diagrams](#diagrams)
+- [Adding a page](#adding-a-page)
+
+<!-- tocstop -->
+
 Each page here describes one pattern that the scripts in this repository use to stay correct when something fails. A page says what problem the pattern solves and where the code applies it. It also names the failure that the pattern guards against, the test that proves it, and where it falls short. The scripts are the reference, and these pages explain them.
 
 Code references name a **function**, not a line number, so that they survive edits. You can check a reference with `grep -n "^<function>()" <file>`.

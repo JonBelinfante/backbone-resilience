@@ -1,5 +1,13 @@
 # Role state machine
 
+<!-- toc -->
+
+- [Transitions for one node](#transitions-for-one-node)
+- [Pairs: the restore script's decision table](#pairs-the-restore-scripts-decision-table)
+- [How to check this diagram](#how-to-check-this-diagram)
+
+<!-- tocstop -->
+
 Each database node is in one of three states. The state comes from the running container and from `pg_is_in_recovery()`.
 
 - **Writer:** The node is running and accepts writes. The value of `pg_is_in_recovery()` is `f`.

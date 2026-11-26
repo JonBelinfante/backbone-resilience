@@ -1,5 +1,10 @@
 # Glossary
 
+<!-- toc -->
+
+
+<!-- tocstop -->
+
 This page defines each term that the repository uses, once. Terms are in alphabetical order. Where a term has a page of its own, the entry links to it. The identifiers, such as FOV-02, are rows in the [capability register](../pg-replication/capability-register.md).
 
 | Term | Meaning |

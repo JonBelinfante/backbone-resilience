@@ -1,5 +1,17 @@
 # House Python standard
 
+<!-- toc -->
+
+- [The standard in one sentence](#the-standard-in-one-sentence)
+- [What is enforced, and by what](#what-is-enforced-and-by-what)
+- [No waivers](#no-waivers)
+- [The checkers are checked](#the-checkers-are-checked)
+- [Running it](#running-it)
+- [Rules for the Python written here](#rules-for-the-python-written-here)
+- [Limits of this standard](#limits-of-this-standard)
+
+<!-- tocstop -->
+
 This page sets out the rules that every Python file in this repository follows, and how a program enforces them. It exists for the same reason as the Bash standard. A program checks the code, and taste does not. All services are written in Python. They are the payment service, the outbox relay, the consumers, the checker, the load generator, the failover controller and the router. The infrastructure scripts and the experiments stay in Bash.
 
 ## The standard in one sentence

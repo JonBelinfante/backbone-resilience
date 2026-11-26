@@ -1,5 +1,14 @@
 # Documentation map
 
+<!-- toc -->
+
+- [I want to learn](#i-want-to-learn)
+- [I want to look something up](#i-want-to-look-something-up)
+- [I want to extend the work](#i-want-to-extend-the-work)
+- [Background on the standards](#background-on-the-standards)
+
+<!-- tocstop -->
+
 This page lists every document by purpose. The root [README](../README.md) is the front page. Start with the path that matches what you want to do.
 
 ## I want to learn

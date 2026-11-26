@@ -1,5 +1,17 @@
 # Primer: how PostgreSQL replication works
 
+<!-- toc -->
+
+- [1. The write-ahead log](#1-the-write-ahead-log)
+- [2. Streaming replication and the hot standby](#2-streaming-replication-and-the-hot-standby)
+- [3. Asynchronous and synchronous commit](#3-asynchronous-and-synchronous-commit)
+- [4. Replication slots](#4-replication-slots)
+- [5. Promotion and timelines](#5-promotion-and-timelines)
+- [6. Rejoining the old writer](#6-rejoining-the-old-writer)
+- [Backup is not replication](#backup-is-not-replication)
+
+<!-- tocstop -->
+
 This primer explains the six ideas that the tests in this repository rely on. Read it before the [capability catalogue](capability-catalogue.md) if replication is new to you. It covers PostgreSQL 16, which the stack runs. Each section ends with the test that shows the idea at work and a link to the official documentation.
 
 ## 1. The write-ahead log

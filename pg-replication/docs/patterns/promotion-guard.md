@@ -1,5 +1,16 @@
 # Promotion guard
 
+<!-- toc -->
+
+- [Problem](#problem)
+- [Mechanism](#mechanism)
+- [Guards against](#guards-against)
+- [Evidence](#evidence)
+- [Limits](#limits)
+- [Related](#related)
+
+<!-- tocstop -->
+
 **Pattern:** refuse a destructive action while the thing that it would displace still answers.
 
 ## Problem

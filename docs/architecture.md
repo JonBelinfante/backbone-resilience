@@ -1,5 +1,14 @@
 # Architecture
 
+<!-- toc -->
+
+- [The stack](#the-stack)
+- [What each part is for](#what-each-part-is-for)
+- [What is not here](#what-is-not-here)
+- [Related diagrams](#related-diagrams)
+
+<!-- tocstop -->
+
 This page shows what runs when the stack is up and which part does what. It is a picture of the laboratory, not of a production design. The terms are in the [glossary](glossary.md).
 
 ## The stack

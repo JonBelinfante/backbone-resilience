@@ -1,5 +1,28 @@
 # Change request: bash-standard
 
+<!-- toc -->
+
+- [1. Summary](#1-summary)
+- [2. Background](#2-background)
+- [3. Requested changes](#3-requested-changes)
+  - [CR-1. One reserved runtime library (Must)](#cr-1-one-reserved-runtime-library-must)
+  - [CR-2. Libraries may call other libraries' functions (Must)](#cr-2-libraries-may-call-other-libraries-functions-must)
+  - [CR-3. --help and usage errors without the script's tools (Should)](#cr-3---help-and-usage-errors-without-the-scripts-tools-should)
+  - [CR-4. Temporary directories in the clean-up pattern (Should)](#cr-4-temporary-directories-in-the-clean-up-pattern-should)
+  - [CR-5. BAN-013 false positive (Should)](#cr-5-ban-013-false-positive-should)
+  - [CR-6. A library in the reference examples (Could)](#cr-6-a-library-in-the-reference-examples-could)
+  - [CR-7. Document three conventions (Could)](#cr-7-document-three-conventions-could)
+- [4. Decisions already taken](#4-decisions-already-taken)
+- [5. Impact and migration](#5-impact-and-migration)
+- [6. Risks and mitigations](#6-risks-and-mitigations)
+- [7. Alternatives considered](#7-alternatives-considered)
+- [8. Out of scope](#8-out-of-scope)
+- [9. Evidence](#9-evidence)
+- [10. Outcome and follow-up observations (2026-11-15)](#10-outcome-and-follow-up-observations-2026-11-15)
+  - [CR-8. Run log files end in .log (Should; raised 2026-11-15; implemented in standard version 7)](#cr-8-run-log-files-end-in-log-should-raised-2026-11-15-implemented-in-standard-version-7)
+
+<!-- tocstop -->
+
 | | |
 |---|---|
 | **ID** | CR-____, not yet assigned. |

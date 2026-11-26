@@ -1,5 +1,27 @@
 # Evidence log
 
+<!-- toc -->
+
+- [2026-11-14: observations behind the manual rows](#2026-11-14-observations-behind-the-manual-rows)
+- [2026-11-20: hard kills](#2026-11-20-hard-kills)
+- [2026-11-21: first gap-closing runs](#2026-11-21-first-gap-closing-runs)
+- [2026-11-21: recovery point and recovery time measurements](#2026-11-21-recovery-point-and-recovery-time-measurements)
+- [2026-11-21: the crash matrix](#2026-11-21-the-crash-matrix)
+- [2026-11-21: the maintenance lock and rotation under synchronous replication](#2026-11-21-the-maintenance-lock-and-rotation-under-synchronous-replication)
+- [2026-11-21: concurrent load](#2026-11-21-concurrent-load)
+- [2026-11-21: network faults](#2026-11-21-network-faults)
+- [2026-11-22: start-time fencing](#2026-11-22-start-time-fencing)
+- [2026-11-22: the detector](#2026-11-22-the-detector)
+- [2026-11-22: the acting half](#2026-11-22-the-acting-half)
+- [2026-11-22: live fencing](#2026-11-22-live-fencing)
+- [2026-11-23: the actor, the controller and the hand-over](#2026-11-23-the-actor-the-controller-and-the-hand-over)
+- [2026-11-24: synchronous replication switched on again by the rejoin](#2026-11-24-synchronous-replication-switched-on-again-by-the-rejoin)
+- [2026-11-25: the write check, the fail-back and link faults](#2026-11-25-the-write-check-the-fail-back-and-link-faults)
+- [2026-11-25: the Phase 1 remainder](#2026-11-25-the-phase-1-remainder)
+- [2026-11-25: the restore left the writer synchronous](#2026-11-25-the-restore-left-the-writer-synchronous)
+
+<!-- tocstop -->
+
 This log holds the raw evidence behind the [capability register](capability-register.md). It has one section for each run of experiments, in date order. Each section gives the commands, the numbers observed, the defects found, and what the result does and does not show. The register holds the conclusions. This log holds the detail. The identifiers, such as FOV-09, are the register's.
 
 The log uses these terms. The write-ahead log (WAL) is the stream of changes that PostgreSQL replicates. The recovery point objective (RPO) is the amount of acknowledged data that may be lost. The recovery time objective (RTO) is the time that clients may be unable to write. A log sequence number (LSN) is a position in the WAL. SIGKILL is the signal that stops a process at once.

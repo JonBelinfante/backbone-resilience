@@ -1,5 +1,26 @@
 # Capability register: the PostgreSQL pair, failover safety and recovery
 
+<!-- toc -->
+
+- [Terms and identifiers](#terms-and-identifiers)
+- [Status at a glance](#status-at-a-glance)
+- [Status legend](#status-legend)
+- [How to run the checks](#how-to-run-the-checks)
+- [1. Replication](#1-replication)
+- [2. Failover, detection, fencing and faults](#2-failover-detection-fencing-and-faults)
+  - [2.1 Failover, fail-back and recovery](#21-failover-fail-back-and-recovery)
+  - [2.2 Detection and automatic failover](#22-detection-and-automatic-failover)
+  - [2.3 Fencing](#23-fencing)
+  - [2.4 Measured loss, downtime and decisions](#24-measured-loss-downtime-and-decisions)
+  - [2.5 Crash, load and network faults](#25-crash-load-and-network-faults)
+- [3. Operations, observability, engineering and secrets](#3-operations-observability-engineering-and-secrets)
+- [4. Open gaps](#4-open-gaps)
+  - [Phase 1 completion record](#phase-1-completion-record)
+  - [Deferred to Phase 3](#deferred-to-phase-3)
+  - [Order of work](#order-of-work)
+
+<!-- tocstop -->
+
 This register lists what the project has proved, with the result and the limit of each claim. It also lists what the project has not proved. A capability counts as proven only when a test has run and the result was observed. The detail of every run, with commands and numbers, is in the [evidence log](evidence-log.md).
 
 The work ran on one machine with Docker Compose, PostgreSQL 16 and two nodes, `pg-primary` and `pg-standby`. The last evidence run was on 2026-11-25.

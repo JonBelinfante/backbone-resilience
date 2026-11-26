@@ -1,5 +1,16 @@
 # Epoch (fencing token)
 
+<!-- toc -->
+
+- [Problem](#problem)
+- [Mechanism](#mechanism)
+- [Guards against](#guards-against)
+- [Evidence](#evidence)
+- [Limits](#limits)
+- [Related](#related)
+
+<!-- tocstop -->
+
 **Pattern:** give every failover a number that only goes up. Write the number down before acting. If the failover is interrupted and resumed, reuse the same number.
 
 ## Problem

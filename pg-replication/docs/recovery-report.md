@@ -1,5 +1,16 @@
 # Recovery measurements: recovery point and recovery time
 
+<!-- toc -->
+
+- [Verdict](#verdict)
+- [RTO: how long the client could not write](#rto-how-long-the-client-could-not-write)
+- [RPO: writes acknowledged and then lost](#rpo-writes-acknowledged-and-then-lost)
+- [Crash matrix: a node killed and restarted, no failover](#crash-matrix-a-node-killed-and-restarted-no-failover)
+- [Every trial](#every-trial)
+- [Limits](#limits)
+
+<!-- tocstop -->
+
 Written by write-recovery-report.sh on 2026-11-25 13:15:24 Coordinated Universal Time (UTC),
 at commit 7a6c529 plus uncommitted changes.
 The server was PostgreSQL 16.16 (Debian 16.16-1.pgdg13+1), with two nodes in Docker Compose on one machine.

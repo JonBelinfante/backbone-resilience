@@ -1,5 +1,50 @@
 # Capability catalogue: how to build a resilient database platform
 
+<!-- toc -->
+
+- [Status at a glance](#status-at-a-glance)
+- [Contents](#contents)
+- [1. Replication and its price](#1-replication-and-its-price)
+  - [1.1 A hot standby that builds itself and stays current](#11-a-hot-standby-that-builds-itself-and-stays-current)
+  - [1.2 Asynchronous or synchronous, switched without a restart](#12-asynchronous-or-synchronous-switched-without-a-restart)
+  - [1.3 A rebuilt standby does not inherit the writer's settings](#13-a-rebuilt-standby-does-not-inherit-the-writers-settings)
+  - [1.4 The modes with the standby down and killed](#14-the-modes-with-the-standby-down-and-killed)
+  - [1.5 The clone rebuild carries no synchronous setting](#15-the-clone-rebuild-carries-no-synchronous-setting)
+- [2. Moving the writer safely](#2-moving-the-writer-safely)
+  - [2.1 Manual failover and fail-back](#21-manual-failover-and-fail-back)
+  - [2.2 Guard rails around the role change](#22-guard-rails-around-the-role-change)
+  - [2.3 A true divergence is rewound and the loss is counted](#23-a-true-divergence-is-rewound-and-the-loss-is-counted)
+  - [2.4 Return to the starting state from anywhere, even after a kill](#24-return-to-the-starting-state-from-anywhere-even-after-a-kill)
+  - [2.5 A second failure during a rejoin](#25-a-second-failure-during-a-rejoin)
+- [3. Fencing: never two writers](#3-fencing-never-two-writers)
+  - [3.1 Start-time fence](#31-start-time-fence)
+  - [3.2 A lease and a guard stop a running writer](#32-a-lease-and-a-guard-stop-a-running-writer)
+  - [3.3 The write itself checks the lease](#33-the-write-itself-checks-the-lease)
+  - [3.4 The lease follows the writer](#34-the-lease-follows-the-writer)
+  - [3.5 The fail-back works the same way](#35-the-fail-back-works-the-same-way)
+- [4. Automatic failover](#4-automatic-failover)
+  - [4.1 A failure detector that a pause does not fool](#41-a-failure-detector-that-a-pause-does-not-fool)
+  - [4.2 An actor that fences, promotes and records an epoch](#42-an-actor-that-fences-promotes-and-records-an-epoch)
+  - [4.3 Only one actor acts](#43-only-one-actor-acts)
+  - [4.4 The controller can die](#44-the-controller-can-die)
+  - [4.5 The window after failing over from synchronous replication](#45-the-window-after-failing-over-from-synchronous-replication)
+- [5. Measuring loss and downtime](#5-measuring-loss-and-downtime)
+- [6. Surviving crashes, load and network faults](#6-surviving-crashes-load-and-network-faults)
+  - [6.1 Crash recovery is correct](#61-crash-recovery-is-correct)
+  - [6.2 Concurrent load keeps money exact](#62-concurrent-load-keeps-money-exact)
+  - [6.3 Network faults: delay, a cut link and silence](#63-network-faults-delay-a-cut-link-and-silence)
+  - [6.4 More link faults: jitter, bandwidth, one-way silence and a dropping link](#64-more-link-faults-jitter-bandwidth-one-way-silence-and-a-dropping-link)
+  - [6.5 A dead standby cannot fill the primary's disk](#65-a-dead-standby-cannot-fill-the-primarys-disk)
+- [7. Safe decisions and safe secrets](#7-safe-decisions-and-safe-secrets)
+  - [7.1 Decisions never read a lagging replica](#71-decisions-never-read-a-lagging-replica)
+  - [7.2 Rotating database secrets with no failed write](#72-rotating-database-secrets-with-no-failed-write)
+- [8. Backup and point-in-time recovery](#8-backup-and-point-in-time-recovery)
+  - [8.1 A mistaken delete is undone from a base backup and the archive](#81-a-mistaken-delete-is-undone-from-a-base-backup-and-the-archive)
+- [9. Engineering practice that makes the proof trustworthy](#9-engineering-practice-that-makes-the-proof-trustworthy)
+- [10. What this catalogue does not cover](#10-what-this-catalogue-does-not-cover)
+
+<!-- tocstop -->
+
 This is the learning guide to the repository. Each entry names a **problem** that a database platform meets when something fails. It then gives the **mechanism** that answers the problem, the **test** that shows the mechanism working, the **result** that we measured, and the **limit** of the evidence.
 
 Every claim is backed by a row in the [capability register](../pg-replication/capability-register.md), which holds the status and the limit. The commands and numbers of each run are in the [evidence log](../pg-replication/evidence-log.md).

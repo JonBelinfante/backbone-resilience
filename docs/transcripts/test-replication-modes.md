@@ -1,5 +1,13 @@
 # Transcript: Replication modes
 
+<!-- toc -->
+
+- [What to look for](#what-to-look-for)
+- [Limit](#limit)
+- [Output](#output)
+
+<!-- tocstop -->
+
 **Test:** [test-replication-modes.sh](../../pg-replication/scripts/test-replication-modes.sh)  
 **Register rows:** REP-04, REP-05, REP-06  
 **Run:** 2026-11-25, at commit 6becac0, on one machine. It took about 30 seconds.  

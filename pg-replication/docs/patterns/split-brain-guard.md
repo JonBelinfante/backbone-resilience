@@ -1,5 +1,16 @@
 # Split-brain guard
 
+<!-- toc -->
+
+- [Problem](#problem)
+- [Mechanism](#mechanism)
+- [Guards against](#guards-against)
+- [Evidence](#evidence)
+- [Limits](#limits)
+- [Related](#related)
+
+<!-- tocstop -->
+
 **Pattern:** when a node starts, check whether it has just become a second writer. If it has, stop it again.
 
 ## Problem
