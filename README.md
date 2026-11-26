@@ -118,7 +118,6 @@ docs/                      capability catalogue, the Python standard, proposals 
 pg-replication/            the PostgreSQL pair: compose file, scripts, libraries, tests, register, patterns
 services/                  Python services: failover_controller (detector), fence_guard (lease guard)
 python-standard/           pinned tools image and test fixtures for the Python checks
-CLAUDE.md                  working notes for the coding assistant used on this project
 ```
 
 ## Roadmap and status

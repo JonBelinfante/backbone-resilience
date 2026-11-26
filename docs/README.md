@@ -17,6 +17,7 @@ This page lists every document by purpose. The root [README](../README.md) is th
 |---|---|
 | [Primer: how PostgreSQL replication works](primer-postgresql-replication.md) | Six ideas that the tests rely on, with links to the official documentation. |
 | [Glossary](glossary.md) | One definition for each term. |
+| [Design principles](design-principles.md) | The ideas for the application layer, the definitions of RPO and RTO, and the target architecture with its checker. |
 | [Architecture](architecture.md) | A picture of the containers, volumes and parts. |
 | [Learning path](learning-path.md) | Seven labs, each with a question, a command, an expected result and an exercise. |
 | [Sample transcripts](transcripts/README.md) | Real output of four tests. |
@@ -41,6 +42,7 @@ This page lists every document by purpose. The root [README](../README.md) is th
 | [Adding an experiment](adding-an-experiment.md) | The template and the steps. |
 | [pg-replication README](../pg-replication/README.md) | Every script and library. |
 | [Python standard](python-standard.md) | The rules that the Python code follows. |
+| [Working conventions](working-conventions.md) | The checks to run, the evidence rule and the script rules that catch new contributors. |
 
 ## Background on the standards
 

@@ -189,7 +189,7 @@ The plan is mechanical and scripted, and the regression net verifies it.
 1. Add `lib/runtime.sh`, which is the draft above as accepted.
 2. For each script, delete the six functions and their comments, the `RUN_LOG_DIR` import, and the `RUN_LOG` and `CLEANUP_PATHS` declarations. Add the import line. Drop `date`, `mktemp` and `rm` from `# Requires:` where the script no longer runs them itself.
 3. Run `bash pg-replication/scripts/run-all-checks.sh`. It lints every script and then runs the 17-step round trip. It must end with `ALL PASSED`.
-4. Save the refactor baseline again, and update the README and `CLAUDE.md`.
+4. Save the refactor baseline again, and update the README and the [working conventions](working-conventions.md).
 
 The edit in step 2 is the same one that was done by hand in the prototype. It can be applied to the 18 scripts in one pass and reviewed as one commit.
 
