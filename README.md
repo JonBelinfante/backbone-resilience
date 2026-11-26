@@ -12,6 +12,7 @@
 - [Repository map](#repository-map)
 - [Roadmap and status](#roadmap-and-status)
 - [Licence](#licence)
+- [Questions and contributions](#questions-and-contributions)
 - [Honest limits](#honest-limits)
 
 <!-- tocstop -->
@@ -136,6 +137,10 @@ A phase is complete when every item in its scope has an automated test and a reg
 ## Licence
 
 The licence is MIT. See [LICENSE](LICENSE). You may use, copy, modify and share the code and the documents. The database credentials in the compose file are throwaway values for local experiments only.
+
+## Questions and contributions
+
+This repository is published for reading, reference and teaching. It does not accept code changes, issues or pull requests, and you are welcome to fork it and change your copy. Questions about the work can go to jonbelinfante.github@gmail.com.
 
 ## Honest limits
 
