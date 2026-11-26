@@ -27,6 +27,7 @@ This page lists every document by purpose. The root [README](../README.md) is th
 | Document | What it gives you |
 |---|---|
 | [Failure modes](failure-modes.md) | Each fault, its effect, what handles it, the evidence and the remaining risk. |
+| [Commands for monitoring and control](commands.md) | The Docker and SQL commands that the scripts use to watch and steer the pair, with how to read each result. |
 | [Decision guide](decision-guide.md) | How to choose a replication mode, a lease time and the timeouts, and when to use backup. |
 | [Capability catalogue](capability-catalogue.md) | One entry for each capability: problem, mechanism, test, result and limit. |
 | [Capability register](../pg-replication/capability-register.md) | Every capability with its status, evidence, result and limit, and the open gaps. |

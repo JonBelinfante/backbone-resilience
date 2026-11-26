@@ -42,6 +42,7 @@ The library is for platform engineers, database engineers, site reliability engi
 |---|---|
 | A **learning path** of seven labs, a **primer** on PostgreSQL replication and a **glossary**. | [docs/learning-path.md](docs/learning-path.md), [docs/primer-postgresql-replication.md](docs/primer-postgresql-replication.md) and [docs/glossary.md](docs/glossary.md) |
 | A **failure-mode index** by fault and a **decision guide** for modes, leases and timeouts. | [docs/failure-modes.md](docs/failure-modes.md) and [docs/decision-guide.md](docs/decision-guide.md) |
+| A **command reference**: the Docker and SQL commands for monitoring and control, which also work as a start for a runbook. | [docs/commands.md](docs/commands.md) |
 | A **capability catalogue**: each resilience problem, its mechanism, its test, the measured result and the limit. | [docs/capability-catalogue.md](docs/capability-catalogue.md) |
 | A **capability register**: every capability, each with a status, a result and a limit, plus the open gaps. | [pg-replication/capability-register.md](pg-replication/capability-register.md) |
 | An **evidence log**: the commands, numbers and defects found in each run of experiments. | [pg-replication/evidence-log.md](pg-replication/evidence-log.md) |
@@ -101,7 +102,7 @@ bash scripts/test-auto-failover.sh         # a controller detects, fences and pr
 
 The Bash standard checker is a private plugin. `run-all-checks.sh` reports the lint as SKIP when `BASHCHECK_WRAPPER` is not set, and it still runs every other check. The skip is stated in the last line, so a skipped lint never reads as a full pass. See [pg-replication/README.md](pg-replication/README.md) for the value. Every script accepts `--help`, except two log scripts that need `RUN_LOG_DIR` to be set. That README explains the limit.
 
-The three secret files are git-ignored, so each clone creates its own. The commands above give each clone its own random values. The credentials are throwaway values and the ports are bound to loopback. Do not expose them, and never put real secrets in this repository.
+The three secret files are git-ignored, so each clone creates its own. The commands above give each clone its own random values. The credentials are throwaway values and the ports are bound to loopback. Do not expose them, and never put real secrets in this repository. The git history was scanned with gitleaks 8.30.1 on 2026-11-26 and no leaks were found.
 
 ## How to read it
 
