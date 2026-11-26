@@ -2,6 +2,16 @@
 name: pg-replication
 
 services:
+  # Runs once and exits. A new named volume belongs to root, and the postgres user could not write
+  # WAL to the archive, so archiving failed on every new stack. The primary waits for this to finish.
+  pg-archive-init:
+    image: postgres:16
+    user: root
+    command: ["chown", "postgres:postgres", "/archive", "/backup"]
+    volumes:
+      - pg-archive:/archive
+      - pg-backup:/backup
+
   pg-primary:
     image: postgres:16
     container_name: pg-primary
@@ -54,6 +64,9 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+    depends_on:
+      pg-archive-init:
+        condition: service_completed_successfully
 
   pg-standby:
     image: postgres:16

@@ -20,7 +20,8 @@ chmod 700 /var/lib/postgresql/data'
 readonly BACKUP_SIGNAL_PROGRAM='touch /var/lib/postgresql/data/recovery.signal'
 
 # Give the archive and the backup volumes to the postgres user, so the primary can write to them.
-# A new volume belongs to root until this has run.
+# A new volume belongs to root. The compose service pg-archive-init does this on every new
+# stack, and this call repeats it, so that a stack from an older compose file also works.
 # Usage: backup::prepare IMAGE
 backup::prepare() {
   local image="${1:?image required}"

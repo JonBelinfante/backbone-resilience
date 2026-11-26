@@ -19,6 +19,7 @@
 - [2026-11-25: the write check, the fail-back and link faults](#2026-11-25-the-write-check-the-fail-back-and-link-faults)
 - [2026-11-25: the Phase 1 remainder](#2026-11-25-the-phase-1-remainder)
 - [2026-11-25: the restore left the writer synchronous](#2026-11-25-the-restore-left-the-writer-synchronous)
+- [2026-11-26: archiving failed on a new stack](#2026-11-26-archiving-failed-on-a-new-stack)
 
 <!-- tocstop -->
 
@@ -308,3 +309,18 @@ The cause was in `restore-starting-state.sh`. It recorded the wanted mode as asy
 
 The fix calls `set-replication-mode.sh --mode async` at the end of the restore. The earlier hung run is the control, because it shows what the old restore left behind.
 
+
+## 2026-11-26: archiving failed on a new stack
+
+While commands were collected for the command reference, `pg_stat_archiver` on the running stack showed 0 archived segments and 2,923 failed attempts. The primary log said `cp: cannot create regular file '/archive/000000010000000000000001': Permission denied`.
+
+The cause was the volume owner. A new named volume belongs to root, and the archive command runs as the postgres user. The only code that changed the owner was `backup::prepare`, which `test-point-in-time.sh` calls. A reader who ran `docker compose up -d` from the README therefore had an archive that never worked, and the WAL stayed on the primary. The point-in-time test still passed, because it repairs the owner itself. That is why no earlier run found the fault.
+
+The fix is a one-shot service in the compose file, `pg-archive-init`. It runs `chown postgres:postgres /archive /backup` as root and exits, and the primary waits for it with `service_completed_successfully`.
+
+| Check | Result |
+|---|---|
+| The old stack, before the change (the control). | 0 archived, 2,923 failed, and the archive folder was empty. |
+| The Compose checker on the changed file. | It conforms, with 43 of 43 rules checked. |
+| A new stack after `docker compose down -v` and `up -d`, with no other step. | The init container exited with status 0. `/archive` and `/backup` belonged to postgres. After one `pg_switch_wal()` the archiver showed 4 archived and 0 failed. |
+| `run-all-checks.sh`, with the round trip. | It passed. Afterwards the archiver showed 7 archived and 0 failed. |
